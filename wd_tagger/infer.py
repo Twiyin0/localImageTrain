@@ -4,17 +4,13 @@ import argparse
 import json
 from pathlib import Path
 
-from PIL import Image
-
 from wd_tagger.config import (
     DEFAULT_CHARACTER_THRESHOLD,
     DEFAULT_GENERAL_THRESHOLD,
     DEFAULT_ONNX_REPO,
-    assert_supported_python,
-    get_default_onnx_providers,
     get_runtime_paths,
 )
-from wd_tagger.models import OnnxTagger, mcut_threshold
+from wd_tagger.service import ImageSource, PredictionOptions, TaggerService
 from wd_tagger.utils import write_json
 
 
@@ -48,70 +44,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def run_inference(args: argparse.Namespace) -> dict:
     runtime = get_runtime_paths()
-    providers = get_default_onnx_providers()
-    tagger = OnnxTagger(
-        repo_id=args.repo_id,
-        cache_dir=runtime.cache_dir,
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    service = TaggerService()
+    image_path = Path(args.image).resolve()
+    source_bytes = image_path.read_bytes()
+    source = ImageSource.from_bytes(
+        filename=image_path.name,
+        content_type=f"image/{image_path.suffix.lower().lstrip('.') or 'png'}",
+        source_bytes=source_bytes,
+        source_path=str(image_path),
+    )
+    payload = service.predict_from_source(
+        source=source,
+        options=PredictionOptions(
+            repo_id=args.repo_id,
+            model_dir=args.model_dir,
+            general_threshold=args.general_threshold,
+            character_threshold=args.character_threshold,
+            general_mcut=args.general_mcut,
+            character_mcut=args.character_mcut,
+        ),
         providers=providers,
-        local_model_dir=args.model_dir,
     )
-    image = Image.open(args.image)
-    scores = tagger.predict(image)
-    meta = tagger.tag_metadata
-    labels = list(zip(meta.tag_names, scores.tolist()))
-
-    rating = {labels[idx][0]: labels[idx][1] for idx in meta.rating_indexes}
-    general = [labels[idx] for idx in meta.general_indexes]
-    characters = [labels[idx] for idx in meta.character_indexes]
-
-    general_threshold = (
-        mcut_threshold([score for _, score in general])
-        if args.general_mcut
-        else args.general_threshold
-    )
-    character_threshold = (
-        max(0.15, mcut_threshold([score for _, score in characters]))
-        if args.character_mcut
-        else args.character_threshold
-    )
-
-    selected_general = {
-        name: score for name, score in general if score >= general_threshold
-    }
-    selected_characters = {
-        name: score for name, score in characters if score >= character_threshold
-    }
-
-    ordered_tags = ", ".join(
-        name
-        for name, _ in sorted(
-            selected_general.items(),
-            key=lambda item: item[1],
-            reverse=True,
-        )
-    )
-
-    payload = {
-        "repo_id": args.repo_id,
-        "model_dir": str(Path(args.model_dir).resolve()) if args.model_dir else None,
-        "image": str(Path(args.image).resolve()),
-        "providers": tagger.active_providers,
-        "thresholds": {
-            "general": general_threshold,
-            "character": character_threshold,
-        },
-        "rating": rating,
-        "characters": selected_characters,
-        "general": selected_general,
-        "caption": ordered_tags,
-    }
+    payload["image"] = str(image_path)
     if args.json_out:
         write_json(args.json_out, payload)
     return payload
 
 
 def main() -> None:
-    assert_supported_python()
     args = build_arg_parser().parse_args()
     payload = run_inference(args)
     print(json.dumps(payload, ensure_ascii=False, indent=2))

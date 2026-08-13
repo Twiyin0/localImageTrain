@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import nullcontext
 import math
 from pathlib import Path
 
@@ -14,12 +13,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-from wd_tagger.config import (
-    DEFAULT_TRAIN_REPO,
-    assert_supported_python,
-    get_default_torch_device,
-    get_runtime_paths,
-)
+from wd_tagger.config import DEFAULT_TRAIN_REPO, get_runtime_paths
 from wd_tagger.data import ManifestRow, MultiLabelImageDataset, load_manifest
 from wd_tagger.utils import ensure_dir, write_json
 
@@ -39,14 +33,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.35)
     parser.add_argument("--unfreeze-backbone", action="store_true")
     parser.add_argument("--gradient-checkpointing", action="store_true")
-    parser.add_argument("--device", default=get_default_torch_device())
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser
-
-
-def autocast_context(device: str):
-    if device.startswith("cuda"):
-        return torch.autocast(device_type="cuda")
-    return nullcontext()
 
 
 def replace_classifier(model: nn.Module, num_classes: int) -> None:
@@ -111,7 +99,6 @@ def build_subset_dataset(
 
 
 def main() -> None:
-    assert_supported_python()
     args = build_arg_parser().parse_args()
     runtime = get_runtime_paths()
     output_dir = ensure_dir(args.output_dir)
@@ -181,7 +168,7 @@ def main() -> None:
         for step, (images, targets) in enumerate(progress, start=1):
             images = images.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
-            with autocast_context(device):
+            with torch.autocast(device_type="cuda", enabled=device.startswith("cuda")):
                 logits = model(images)
                 loss = criterion(logits, targets) / args.grad_accum
 

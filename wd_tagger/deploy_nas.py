@@ -15,6 +15,7 @@ DEFAULT_EXCLUDES = {
     ".cache",
     "__pycache__",
     "outputs",
+    "models",
     ".pytest_cache",
     ".mypy_cache",
 }
@@ -69,15 +70,11 @@ def stream_tar_to_remote(ssh: paramiko.SSHClient, local_root: Path, remote_root:
         raise RuntimeError("SSH transport is not available")
     channel = transport.open_session()
     channel.exec_command(command)
-    stdin = channel.makefile("wb")
-    stdout = channel.makefile("rb")
-    stderr = channel.makefile_stderr("rb")
-    stdin.write(payload)
-    stdin.flush()
-    stdin.close()
+    channel.sendall(payload)
+    channel.shutdown_write()
     exit_code = channel.recv_exit_status()
-    out = stdout.read().decode("utf-8", errors="replace")
-    err = stderr.read().decode("utf-8", errors="replace")
+    out = channel.recv(1024 * 1024).decode("utf-8", errors="replace")
+    err = channel.recv_stderr(1024 * 1024).decode("utf-8", errors="replace")
     if out.strip():
         print(out)
     if err.strip():

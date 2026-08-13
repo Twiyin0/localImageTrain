@@ -1,101 +1,248 @@
 # WaifuDiffusion Tagger API
 
-## 基础信息
+## Base URL
 
-- Base URL: `http://<host>:8000`
-- 在线文档: `/docs`
+- `http://<host>:8000`
+- Swagger UI: `/docs`
 - ReDoc: `/redoc`
 
-## 1. 健康检查
+## Authentication
 
-### 请求
+All processing endpoints require an API key.
+
+You can provide it as either:
+
+```http
+X-API-Key: your-api-key
+```
+
+or:
+
+```http
+Authorization: Bearer your-api-key
+```
+
+## Health Check
 
 ```http
 GET /health
 ```
 
-### 响应示例
+Example response:
 
 ```json
 {
   "status": "ok",
-  "python": "/app/.venv/bin/python",
+  "python": "/usr/local/bin/python",
   "repo_id": "SmilingWolf/wd-convnext-tagger-v3",
-  "model_dir": null,
-  "providers": ["CPUExecutionProvider"]
+  "model_dir": "/app/models/wd-convnext-tagger-v3",
+  "providers": ["CPUExecutionProvider"],
+  "auth_enabled": true
 }
 ```
 
-## 2. 图片打标
+## Legacy Endpoints
 
-### 请求
+### Single image JSON
 
 ```http
 POST /tag
-Content-Type: multipart/form-data
 ```
 
-### 表单字段
+Form fields:
 
-- `image`: 必填，图片文件
-- `general_threshold`: 可选，默认 `0.35`
-- `character_threshold`: 可选，默认 `0.85`
-- `general_mcut`: 可选，默认 `false`
-- `character_mcut`: 可选，默认 `false`
+- `image`
+- `general_threshold`
+- `character_threshold`
+- `general_mcut`
+- `character_mcut`
 
-### `curl` 示例
+### Batch image JSON
+
+```http
+POST /tag/batch
+```
+
+Form fields:
+
+- `images`
+- `general_threshold`
+- `character_threshold`
+- `general_mcut`
+- `character_mcut`
+
+## Unified Endpoint
+
+```http
+POST /process
+```
+
+All processing endpoints also return timing headers:
+
+- `X-WD-Backend-Process-Time-Ms`: model-side processing time on the backend
+- `X-WD-Backend-Total-Time-Ms`: backend total request time, including image decode/load and processing
+
+Shared form fields:
+
+- `type`
+- `general_threshold`
+- `character_threshold`
+- `general_mcut`
+- `character_mcut`
+
+Optional inputs:
+
+- `image`: for single-image modes
+- `images`: for uploaded batch modes
+- `input_dir`: server-side directory path for batch modes
+- `export_format`: only used by `type=json`, values are `inline`, `json`, `csv`, `both`
+
+## Supported `type` Values
+
+### `type=tag`
+
+Single image only.
+
+Output:
+
+- plain text
+- only the final caption/tag string
+
+Example:
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/tag" \
-  -F "image=@demo.png" \
-  -F "general_threshold=0.35" \
-  -F "character_threshold=0.85"
+curl -X POST "http://10.1.0.2:8000/process" \
+  -H "X-API-Key: your-api-key" \
+  -F "type=tag" \
+  -F "image=@demo.jpg"
 ```
 
-### 响应示例
+### `type=arrary`
+
+Single image only.
+
+Output:
+
+- JSON string array
+- only the selected general tags
+
+Example response:
+
+```json
+["1girl", "solo", "pink hair"]
+```
+
+Example timing headers:
+
+```http
+X-WD-Backend-Process-Time-Ms: 1420.37
+X-WD-Backend-Total-Time-Ms: 1548.92
+```
+
+### `type=tagimg`
+
+Single image only.
+
+Output:
+
+- image file download
+- tags are written into image metadata
+
+Notes:
+
+- PNG output stores text metadata
+- JPEG/WebP tries to write EXIF comment fields
+
+### `type=json`
+
+Batch mode.
+
+Input:
+
+- uploaded `images`
+- or `input_dir`
+- or both
+
+Output depends on `export_format`:
+
+- `inline`: JSON response body
+- `json`: downloadable `results.json`
+- `csv`: downloadable `results.csv`
+- `both`: downloadable zip containing both files
+
+Batch JSON items include cache metadata:
+
+- `cache.cache_hit`: `miss` / `exact` / `similar`
+- `cache.source_md5`
+- `cache.similarity_score`
+
+Batch summary also includes:
+
+- `cache_stats.miss`
+- `cache_stats.exact`
+- `cache_stats.similar`
+
+Notes:
+
+- `similar` cache reuse is only enabled for batch processing
+- single-image modes only use exact cache hits
+
+Example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/process" \
+  -H "X-API-Key: your-api-key" \
+  -F "type=json" \
+  -F "input_dir=/volume2/Project/images" \
+  -F "export_format=both"
+```
+
+### `type=mulitagimg`
+
+Batch mode.
+
+Input:
+
+- uploaded `images`
+- or `input_dir`
+- or both
+
+Output:
+
+- zip file
+- contains tagged images with metadata
+- also contains `results.json`
+
+## Error Cases
+
+### Invalid or missing API key
 
 ```json
 {
-  "repo_id": "SmilingWolf/wd-convnext-tagger-v3",
-  "model_dir": null,
-  "providers": ["CPUExecutionProvider"],
-  "metrics": {
-    "total_elapsed_ms": 142.67,
-    "inference_elapsed_ms": 118.41,
-    "cpu_elapsed_ms": 96.52,
-    "process_current_rss_mb": 186.54,
-    "process_peak_rss_mb": 214.38,
-    "cpu_user_time_s": 2.4187,
-    "cpu_system_time_s": 0.3511
-  },
-  "thresholds": {
-    "general": 0.35,
-    "character": 0.85
-  },
-  "rating": {
-    "general": 0.998
-  },
-  "characters": {},
-  "general": {
-    "1girl": 0.997,
-    "solo": 0.992
-  },
-  "caption": "1girl, solo",
-  "filename": "demo.png",
-  "content_type": "image/png"
+  "detail": "Invalid or missing API key"
 }
 ```
 
-## 3. 返回字段说明
+### Unsupported `type`
 
-- `providers`: 当前实际使用的 ONNX provider
-- `metrics`: 推理耗时和当前进程资源占用信息
-- `metrics.total_elapsed_ms`: 整个请求处理耗时，单位毫秒
-- `metrics.inference_elapsed_ms`: ONNX 模型前向推理耗时，单位毫秒
-- `metrics.cpu_elapsed_ms`: 本次请求占用的进程 CPU 时间，单位毫秒
-- `metrics.process_current_rss_mb`: 当前进程内存占用，单位 MB
-- `metrics.process_peak_rss_mb`: 当前进程历史峰值内存占用，单位 MB
-- `rating`: 评级标签
-- `characters`: 角色标签
-- `general`: 普通标签
-- `caption`: 逗号拼接后的标签文本
+```json
+{
+  "detail": "Unsupported type"
+}
+```
+
+### Missing required single image input
+
+```json
+{
+  "detail": "single-image types require the image field"
+}
+```
+
+### Missing required batch input
+
+```json
+{
+  "detail": "batch types require images or input_dir"
+}
+```

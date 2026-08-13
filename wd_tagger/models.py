@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -49,6 +51,45 @@ class TagMetadata:
 
 
 def preload_cuda_runtime() -> None:
+    if os.name == "nt":
+        dll_dirs: list[Path] = []
+
+        cuda_env_paths = [
+            os.getenv("CUDA_PATH"),
+            os.getenv("CUDA_PATH_V12_0"),
+            os.getenv("CUDA_PATH_V12_1"),
+            os.getenv("CUDA_PATH_V12_2"),
+            os.getenv("CUDA_PATH_V12_3"),
+        ]
+        for raw_path in cuda_env_paths:
+            if not raw_path:
+                continue
+            dll_dirs.append(Path(raw_path) / "bin")
+
+        torch_lib_dir = (
+            Path(sys.executable).resolve().parent.parent
+            / "Lib"
+            / "site-packages"
+            / "torch"
+            / "lib"
+        )
+        dll_dirs.append(torch_lib_dir)
+
+        seen: set[str] = set()
+        path_entries = os.environ.get("PATH", "").split(os.pathsep)
+        for dll_dir in dll_dirs:
+            resolved = str(dll_dir.resolve()) if dll_dir.exists() else None
+            if not resolved or resolved in seen:
+                continue
+            seen.add(resolved)
+            try:
+                os.add_dll_directory(resolved)
+            except (AttributeError, FileNotFoundError, OSError):
+                pass
+            if resolved not in path_entries:
+                path_entries.insert(0, resolved)
+        os.environ["PATH"] = os.pathsep.join(path_entries)
+
     # ONNX Runtime can reuse CUDA/cuDNN DLLs bundled with PyTorch when both
     # stacks target the same CUDA/cuDNN major versions.
     try:

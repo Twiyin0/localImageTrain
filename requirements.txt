@@ -4,3 +4,4 @@ onnxruntime>=1.21,<1.27
 pandas>=2.2.0
 pillow>=10.4.0
 gradio>=5.20.0
+httpx>=0.28.0

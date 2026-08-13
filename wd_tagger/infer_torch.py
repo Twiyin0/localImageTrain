@@ -9,15 +9,13 @@ import torch
 from PIL import Image
 from timm.data import create_transform, resolve_model_data_config
 
-from wd_tagger.config import assert_supported_python, get_default_torch_device
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inference for fine-tuned WD Tagger checkpoints")
     parser.add_argument("image", help="Input image path")
     parser.add_argument("--checkpoint", required=True, help="Path to best.pt from training")
     parser.add_argument("--threshold", type=float, default=None)
-    parser.add_argument("--device", default=get_default_torch_device())
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--json-out", help="Optional JSON output path")
     return parser
 
@@ -85,7 +83,6 @@ def run_inference(args: argparse.Namespace) -> dict:
 
 
 def main() -> None:
-    assert_supported_python()
     args = build_arg_parser().parse_args()
     payload = run_inference(args)
     print(json.dumps(payload, ensure_ascii=False, indent=2))

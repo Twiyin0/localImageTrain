@@ -1,18 +1,19 @@
-$ErrorActionPreference = "Stop"
-
 param(
-    [string]$VenvPath = "..\\.venv",
-    [string]$Host = "127.0.0.1",
+    [string]$VenvPath = ".venv",
+    [string]$ListenHost = "127.0.0.1",
     [int]$Port = 7860
 )
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$resolvedVenv = Join-Path $scriptDir $VenvPath
+$ErrorActionPreference = "Stop"
+
+$scriptDir = $PSScriptRoot
+$projectRoot = Split-Path -Parent $scriptDir
+$resolvedVenv = Join-Path $projectRoot $VenvPath
 $python = Join-Path $resolvedVenv "Scripts\python.exe"
 
-Push-Location $scriptDir
+Push-Location $projectRoot
 try {
-    & $python app.py --host $Host --port $Port
+    & $python Gradio\app.py --host $ListenHost --port $Port
 }
 finally {
     Pop-Location
