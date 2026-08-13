@@ -1,0 +1,19 @@
+services:
+  wd-tagger-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: wd-tagger-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.nas
+    environment:
+      HF_HOME: /app/.cache/huggingface
+      WD_TAGGER_PROVIDERS: CPUExecutionProvider
+      WD_TAGGER_REPO_ID: SmilingWolf/wd-convnext-tagger-v3
+      WD_TAGGER_MODEL_DIR: /app/models/wd-convnext-tagger-v3
+    volumes:
+      - ./.cache:/app/.cache
+      - ./models:/app/models

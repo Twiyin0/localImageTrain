@@ -1,0 +1,11 @@
+.venv/
+.cache/
+__pycache__/
+outputs/
+models/
+*.pyc
+*.pyo
+*.log
+.env
+.env.*
+!.env.nas.example
