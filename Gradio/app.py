@@ -207,6 +207,56 @@ APP_CSS = """
 #local-shell .results-file {
   min-height: 160px;
 }
+
+#local-input-image {
+  max-height: 460px;
+  overflow: hidden;
+}
+
+#local-input-image .image-container,
+#local-input-image .image-frame,
+#local-input-image img,
+#local-input-image canvas {
+  max-height: 390px !important;
+  object-fit: contain !important;
+}
+
+#local-back-to-top {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+  width: 44px;
+  min-width: 44px !important;
+  height: 44px;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#local-back-to-top button {
+  width: 44px;
+  min-width: 44px !important;
+  height: 44px;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  border: 1px solid var(--border) !important;
+  background: #f56d16 !important;
+  color: white !important;
+  font-size: 22px !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 768px) {
+  #local-shell.gradio-container { padding: 10px 10px 72px !important; }
+  #local-input-image { max-height: 360px; }
+  #local-input-image .image-container,
+  #local-input-image .image-frame,
+  #local-input-image img,
+  #local-input-image canvas { max-height: 290px !important; }
+  #local-back-to-top { right: 14px; bottom: 14px; }
+}
 """
 
 
@@ -522,14 +572,14 @@ class Predictor:
         metrics_html = render_metrics_html(self._payload_metrics(payload))
         flagged_html = render_flagged_html(flagged_summary)
         tags = extract_tags(payload)
-
-        if process_type == "tag":
-            return str(payload.get("caption", "")), payload, highlighted_html, flagged_html, None, metrics_html
-        if process_type in {"arrary", "array"}:
-            return ", ".join(tags), tags, highlighted_html, flagged_html, None, metrics_html
-
         output_dir = self.service.create_request_dir("gradio_single")
         output_path = self.service.write_tagged_image(output_dir, source, payload)
+
+        if process_type == "tag":
+            return str(payload.get("caption", "")), payload, highlighted_html, flagged_html, str(output_path), metrics_html
+        if process_type in {"arrary", "array"}:
+            return ", ".join(tags), tags, highlighted_html, flagged_html, str(output_path), metrics_html
+
         return "", payload, highlighted_html, flagged_html, str(output_path), metrics_html
 
     def process_batch(
@@ -649,7 +699,14 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("单张处理"):
                 with gr.Row():
                     with gr.Column(scale=11, min_width=500):
-                        image = gr.Image(type="pil", image_mode="RGBA", label="输入图像")
+                        submit_single = gr.Button("开始处理单张图像", variant="primary", elem_classes=["primary-action"])
+                        image = gr.Image(
+                            type="pil",
+                            image_mode="RGBA",
+                            label="输入图像",
+                            height=390,
+                            elem_id="local-input-image",
+                        )
                         single_model = gr.Dropdown(local_models, value=predictor.local_model_dir, label="本地模型")
                         process_type_single = gr.Dropdown(
                             choices=[
@@ -666,10 +723,8 @@ def build_ui() -> gr.Blocks:
                         with gr.Row():
                             single_general_mcut = gr.Checkbox(label="通用标签自动阈值（MCut）")
                             single_character_mcut = gr.Checkbox(label="角色标签自动阈值（MCut）")
-                        submit_single = gr.Button("开始处理单张图像", variant="primary", elem_classes=["primary-action"])
-
                     with gr.Column(scale=9, min_width=420):
-                        with gr.Accordion("结果与详情", open=False):
+                        with gr.Accordion("结果与详情", open=False) as single_results:
                             with gr.Tabs(elem_classes=["result-tabs"]):
                                 with gr.Tab("标签结果"):
                                     single_text = gr.Textbox(label="标签输出", lines=5, max_lines=10)
@@ -679,7 +734,7 @@ def build_ui() -> gr.Blocks:
                                 with gr.Tab("风险提示"):
                                     single_flagged = gr.HTML(value=render_empty_card("暂无风险提示", "执行后这里会显示敏感标签和评分。"))
                                 with gr.Tab("导出文件"):
-                                    single_file = gr.File(label="生成文件", elem_classes=["results-file"])
+                                    single_file = gr.File(label="带标签元数据的图像", elem_classes=["results-file"])
                                 with gr.Tab("资源指标"):
                                     single_metrics = gr.HTML(value=render_empty_card("暂无指标", "执行后这里会显示推理耗时、内存和缓存信息。"))
 
@@ -708,7 +763,7 @@ def build_ui() -> gr.Blocks:
                         submit_batch = gr.Button("开始批量处理", variant="primary", elem_classes=["primary-action"])
 
                     with gr.Column(scale=9, min_width=420):
-                        with gr.Accordion("结果与详情", open=False):
+                        with gr.Accordion("结果与详情", open=False) as batch_results:
                             with gr.Tabs(elem_classes=["result-tabs"]):
                                 with gr.Tab("处理摘要"):
                                     batch_summary = gr.HTML(value=render_empty_card("等待批量结果", "执行批量处理后，这里会显示总数、成功数和缓存统计。"))
@@ -728,7 +783,9 @@ def build_ui() -> gr.Blocks:
                     warmup_status = gr.HTML(value=predictor.warmup_status_html(), elem_classes=["status-card"])
                     warmup_button = gr.Button("刷新模型状态", variant="secondary", elem_classes=["secondary-action"])
 
-        submit_single.click(
+        back_to_top = gr.Button("↑", elem_id="local-back-to-top", size="sm")
+
+        single_event = submit_single.click(
             predictor.process_single,
             inputs=[
                 image,
@@ -741,7 +798,8 @@ def build_ui() -> gr.Blocks:
             ],
             outputs=[single_text, single_json, single_highlight, single_flagged, single_file, single_metrics],
         )
-        submit_batch.click(
+        single_event.then(lambda: gr.Accordion(open=True), outputs=single_results, queue=False)
+        batch_event = submit_batch.click(
             predictor.process_batch,
             inputs=[
                 batch_files,
@@ -755,6 +813,12 @@ def build_ui() -> gr.Blocks:
                 batch_character_mcut,
             ],
             outputs=[batch_json, batch_summary, batch_flagged, batch_json_file, batch_csv_file, batch_file, batch_metrics],
+        )
+        batch_event.then(lambda: gr.Accordion(open=True), outputs=batch_results, queue=False)
+        back_to_top.click(
+            None,
+            js="() => window.scrollTo({ top: 0, behavior: 'smooth' })",
+            queue=False,
         )
         warmup_button.click(
             predictor.warmup,

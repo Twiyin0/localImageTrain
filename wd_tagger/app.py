@@ -196,6 +196,56 @@ APP_CSS = """
 #remote-shell .results-file {
   min-height: 160px;
 }
+
+#remote-input-image {
+  max-height: 460px;
+  overflow: hidden;
+}
+
+#remote-input-image .image-container,
+#remote-input-image .image-frame,
+#remote-input-image img,
+#remote-input-image canvas {
+  max-height: 390px !important;
+  object-fit: contain !important;
+}
+
+#remote-back-to-top {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+  width: 44px;
+  min-width: 44px !important;
+  height: 44px;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#remote-back-to-top button {
+  width: 44px;
+  min-width: 44px !important;
+  height: 44px;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  border: 1px solid var(--border) !important;
+  background: #f56d16 !important;
+  color: white !important;
+  font-size: 22px !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 768px) {
+  #remote-shell.gradio-container { padding: 10px 10px 72px !important; }
+  #remote-input-image { max-height: 360px; }
+  #remote-input-image .image-container,
+  #remote-input-image .image-frame,
+  #remote-input-image img,
+  #remote-input-image canvas { max-height: 290px !important; }
+  #remote-back-to-top { right: 14px; bottom: 14px; }
+}
 """
 
 
@@ -475,18 +525,35 @@ class RemoteClient:
             return "请先提供一张图像。", None, empty, empty, None, empty, empty
 
         path = Path(image_path)
+        source_bytes = path.read_bytes()
+        request_data = {
+            "general_threshold": str(general_threshold),
+            "general_mcut": str(general_mcut).lower(),
+            "character_threshold": str(character_threshold),
+            "character_mcut": str(character_mcut).lower(),
+        }
+        upload = [("image", (path.name, source_bytes, f"image/{path.suffix.lower().lstrip('.') or 'png'}"))]
         try:
             remote = self._request(
                 base_url=base_url,
                 api_key=api_key,
-                data={
-                    "type": process_type,
-                    "general_threshold": str(general_threshold),
-                    "general_mcut": str(general_mcut).lower(),
-                    "character_threshold": str(character_threshold),
-                    "character_mcut": str(character_mcut).lower(),
-                },
-                files=[("image", (path.name, path.read_bytes(), f"image/{path.suffix.lower().lstrip('.') or 'png'}"))],
+                data={**request_data, "type": process_type},
+                files=upload,
+            )
+            tagged_response = remote
+            if process_type != "tagimg":
+                tagged_response = self._request(
+                    base_url=base_url,
+                    api_key=api_key,
+                    data={**request_data, "type": "tagimg"},
+                    files=upload,
+                )
+            if not isinstance(tagged_response.body, bytes):
+                raise ValueError("Remote API did not return a tagged image file.")
+            output_path = self._save_binary(
+                "tagimg",
+                tagged_response.filename or f"{path.stem}_tagged{path.suffix or '.png'}",
+                tagged_response.body,
             )
         except Exception as exc:
             payload = self._serialize_error(exc)
@@ -499,12 +566,11 @@ class RemoteClient:
 
         if process_type == "tag":
             flagged_html = render_flagged_html(str(remote.body))
-            return str(remote.body), {"caption": remote.body}, render_empty_card("文本模式", "当前模式只返回标签文本。"), flagged_html, None, timing_html, metrics_html
+            return str(remote.body), {"caption": remote.body}, render_empty_card("处理完成", "标签文本和带标签元数据的图像均已生成。"), flagged_html, output_path, timing_html, metrics_html
         if process_type == "arrary":
             flagged_html = render_flagged_html(remote.body if isinstance(remote.body, list) else [])
-            return "", remote.body if isinstance(remote.body, list) else [], render_empty_card("数组模式", "当前模式返回标签数组。"), flagged_html, None, timing_html, metrics_html
+            return "", remote.body if isinstance(remote.body, list) else [], render_empty_card("处理完成", "标签数组和带标签元数据的图像均已生成。"), flagged_html, output_path, timing_html, metrics_html
         if isinstance(remote.body, bytes):
-            output_path = self._save_binary("tagimg", remote.filename or f"{path.stem}_tagged{path.suffix or '.png'}", remote.body)
             payload = {
                 "saved_file": output_path,
                 "remote_content_type": remote.content_type,
@@ -624,7 +690,13 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("单张处理"):
                 with gr.Row():
                     with gr.Column(scale=11, min_width=500):
-                        image = gr.Image(type="filepath", label="输入图像")
+                        submit_single = gr.Button("开始处理单张图像", variant="primary", elem_classes=["primary-action"])
+                        image = gr.Image(
+                            type="filepath",
+                            label="输入图像",
+                            height=390,
+                            elem_id="remote-input-image",
+                        )
                         process_type_single = gr.Dropdown(
                             choices=[
                                 ("仅返回标签文本", "tag"),
@@ -640,10 +712,8 @@ def build_ui() -> gr.Blocks:
                         with gr.Row():
                             general_mcut = gr.Checkbox(label="通用标签自动阈值（MCut）")
                             character_mcut = gr.Checkbox(label="角色标签自动阈值（MCut）")
-                        submit_single = gr.Button("开始处理单张图像", variant="primary", elem_classes=["primary-action"])
-
                     with gr.Column(scale=9, min_width=420):
-                        with gr.Accordion("结果与详情", open=False):
+                        with gr.Accordion("结果与详情", open=False) as single_results:
                             with gr.Tabs(elem_classes=["result-tabs"]):
                                 with gr.Tab("标签结果"):
                                     single_text = gr.Textbox(label="标签输出", lines=5, max_lines=10)
@@ -653,7 +723,7 @@ def build_ui() -> gr.Blocks:
                                 with gr.Tab("风险提示"):
                                     single_flagged = gr.HTML(value=render_empty_card("暂无风险提示", "执行后这里会显示敏感标签和评分。"))
                                 with gr.Tab("导出文件"):
-                                    single_file = gr.File(label="下载文件", elem_classes=["results-file"])
+                                    single_file = gr.File(label="带标签元数据的图像", elem_classes=["results-file"])
                                 with gr.Tab("耗时指标"):
                                     single_timing = gr.HTML(value=render_empty_card("暂无耗时数据", "请求完成后，这里会显示前端和后端耗时。"))
                                     single_metrics = gr.HTML(value=render_empty_card("暂无资源指标", "请求完成后，这里会显示远端返回的资源指标。"))
@@ -682,7 +752,7 @@ def build_ui() -> gr.Blocks:
                         submit_batch = gr.Button("开始批量处理", variant="primary", elem_classes=["primary-action"])
 
                     with gr.Column(scale=9, min_width=420):
-                        with gr.Accordion("结果与详情", open=False):
+                        with gr.Accordion("结果与详情", open=False) as batch_results:
                             with gr.Tabs(elem_classes=["result-tabs"]):
                                 with gr.Tab("处理摘要"):
                                     batch_summary = gr.HTML(value=render_empty_card("等待批量结果", "执行批量处理后，这里会显示处理摘要。"))
@@ -696,12 +766,14 @@ def build_ui() -> gr.Blocks:
                                     batch_timing = gr.HTML(value=render_empty_card("暂无耗时数据", "请求完成后，这里会显示前端和后端耗时。"))
                                     batch_metrics = gr.HTML(value=render_empty_card("暂无资源指标", "请求完成后，这里会显示远端返回的资源指标。"))
 
+        back_to_top = gr.Button("↑", elem_id="remote-back-to-top", size="sm")
+
         health_button.click(
             client.health,
             inputs=[api_base_url, api_key],
             outputs=[health_output, health_status],
         )
-        submit_single.click(
+        single_event = submit_single.click(
             client.process_single,
             inputs=[
                 api_base_url,
@@ -715,7 +787,8 @@ def build_ui() -> gr.Blocks:
             ],
             outputs=[single_text, single_json, single_summary, single_flagged, single_file, single_timing, single_metrics],
         )
-        submit_batch.click(
+        single_event.then(lambda: gr.Accordion(open=True), outputs=single_results, queue=False)
+        batch_event = submit_batch.click(
             client.process_batch,
             inputs=[
                 api_base_url,
@@ -730,6 +803,12 @@ def build_ui() -> gr.Blocks:
                 batch_character_mcut,
             ],
             outputs=[batch_json, batch_summary, batch_flagged, batch_file, batch_timing, batch_metrics],
+        )
+        batch_event.then(lambda: gr.Accordion(open=True), outputs=batch_results, queue=False)
+        back_to_top.click(
+            None,
+            js="() => window.scrollTo({ top: 0, behavior: 'smooth' })",
+            queue=False,
         )
 
     return demo
