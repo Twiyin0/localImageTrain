@@ -40,7 +40,46 @@ def _bytes_to_mb(value: float) -> float:
     return round(value / (1024 * 1024), 2)
 
 
+def _read_macos_current_rss_bytes() -> float | None:
+    class TimeValue(ctypes.Structure):
+        _fields_ = [("seconds", ctypes.c_int32), ("microseconds", ctypes.c_int32)]
+
+    class MachTaskBasicInfo(ctypes.Structure):
+        _fields_ = [
+            ("virtual_size", ctypes.c_uint64),
+            ("resident_size", ctypes.c_uint64),
+            ("resident_size_max", ctypes.c_uint64),
+            ("user_time", TimeValue),
+            ("system_time", TimeValue),
+            ("policy", ctypes.c_int32),
+            ("suspend_count", ctypes.c_int32),
+        ]
+
+    try:
+        libsystem = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+        libsystem.mach_task_self.restype = ctypes.c_uint32
+        libsystem.task_info.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        info = MachTaskBasicInfo()
+        count = ctypes.c_uint32(ctypes.sizeof(info) // ctypes.sizeof(ctypes.c_int))
+        result = libsystem.task_info(
+            libsystem.mach_task_self(),
+            20,  # MACH_TASK_BASIC_INFO
+            ctypes.cast(ctypes.byref(info), ctypes.POINTER(ctypes.c_int)),
+            ctypes.byref(count),
+        )
+        return float(info.resident_size) if result == 0 else None
+    except Exception:
+        return None
+
+
 def _read_current_rss_bytes() -> float | None:
+    if sys.platform == "darwin":
+        return _read_macos_current_rss_bytes()
     if sys.platform.startswith("linux"):
         status_path = Path("/proc/self/status")
         if status_path.exists():
@@ -59,36 +98,6 @@ def _read_current_rss_bytes() -> float | None:
     except Exception:
         return None
     return None
-
-
-def collect_process_metrics() -> dict[str, float | None]:
-    usage = resource.getrusage(resource.RUSAGE_SELF)
-    rss_value = float(usage.ru_maxrss)
-    if platform.system() != "Darwin":
-        rss_value *= 1024
-    current_rss_bytes = _read_current_rss_bytes()
-    return {
-        "process_current_rss_mb": (
-            _bytes_to_mb(current_rss_bytes) if current_rss_bytes is not None else None
-        ),
-        "process_peak_rss_mb": _bytes_to_mb(rss_value),
-        "cpu_user_time_s": round(float(usage.ru_utime), 4),
-        "cpu_system_time_s": round(float(usage.ru_stime), 4),
-    }
-
-
-def localize_metrics(metrics: dict) -> dict:
-    current_rss = metrics.get("process_current_rss_mb")
-    peak_rss = metrics.get("process_peak_rss_mb")
-    return {
-        "总耗时": f"{metrics['total_elapsed_ms']} ms",
-        "模型推理耗时": f"{metrics['inference_elapsed_ms']} ms",
-        "本次 CPU 耗时": f"{metrics['cpu_elapsed_ms']} ms",
-        "当前进程内存占用": f"{current_rss} MB" if current_rss is not None else "不可用",
-        "当前进程内存峰值": f"{peak_rss} MB" if peak_rss is not None else "不可用",
-        "累计用户态 CPU 时间": f"{metrics['cpu_user_time_s']} s",
-        "累计内核态 CPU 时间": f"{metrics['cpu_system_time_s']} s",
-    }
 
 
 def collect_process_metrics() -> dict[str, float | None]:
@@ -172,22 +181,6 @@ def collect_process_metrics() -> dict[str, float | None]:
         "process_peak_rss_mb": _bytes_to_mb(rss_value),
         "cpu_user_time_s": round(float(usage.ru_utime), 4),
         "cpu_system_time_s": round(float(usage.ru_stime), 4),
-    }
-
-
-def localize_metrics(metrics: dict[str, Any] | None) -> dict[str, str]:
-    if not metrics:
-        return {}
-    current_rss = metrics.get("process_current_rss_mb")
-    peak_rss = metrics.get("process_peak_rss_mb")
-    return {
-        "总耗时": f"{metrics.get('total_elapsed_ms')} ms",
-        "模型推理耗时": f"{metrics.get('inference_elapsed_ms')} ms",
-        "本次 CPU 耗时": f"{metrics.get('cpu_elapsed_ms')} ms",
-        "当前进程内存占用": f"{current_rss} MB" if current_rss is not None else "不可用",
-        "当前进程内存峰值": f"{peak_rss} MB" if peak_rss is not None else "不可用",
-        "累计用户态 CPU 时间": f"{metrics.get('cpu_user_time_s')} s",
-        "累计内核态 CPU 时间": f"{metrics.get('cpu_system_time_s')} s",
     }
 
 

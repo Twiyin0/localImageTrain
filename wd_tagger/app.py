@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -12,7 +13,7 @@ import gradio as gr
 import httpx
 
 from wd_tagger.config import DEFAULT_CHARACTER_THRESHOLD, DEFAULT_GENERAL_THRESHOLD, get_runtime_paths
-from wd_tagger.content_flags import build_flagged_summary, extract_tags
+from wd_tagger.content_flags import build_flagged_summary
 from wd_tagger.service import localize_metrics
 
 
@@ -24,6 +25,179 @@ SINGLE_TYPES = ["tag", "arrary", "tagimg"]
 BATCH_TYPES = ["json", "mulitagimg"]
 EXPORT_FORMATS = ["inline", "json", "csv", "both"]
 
+APP_CSS = """
+#remote-shell {
+  --bg: #0b0f15;
+  --panel: rgba(16, 22, 31, 0.94);
+  --panel-2: rgba(22, 29, 41, 0.98);
+  --border: rgba(130, 148, 176, 0.18);
+  --text: #eef4ff;
+  --muted: #99abc6;
+  --accent: #ff7a18;
+  --accent-2: #ff9a52;
+  --ok: #31c48d;
+  --warn: #ffb454;
+  --bad: #ff7b7b;
+}
+
+#remote-shell.gradio-container {
+  max-width: 1580px !important;
+  padding: 16px 24px 40px !important;
+  background: #0b0f15;
+  color: var(--text);
+  font-family: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+}
+
+#remote-shell .block {
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  background: var(--panel) !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.22);
+}
+
+#remote-shell .status-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(13, 18, 27, 0.94);
+  padding: 12px 14px;
+}
+
+#remote-shell .tabs {
+  gap: 12px;
+}
+
+#remote-shell .tabs > .tab-nav {
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+#remote-shell .tabs > .tab-nav button {
+  min-height: 44px;
+  border-radius: 6px !important;
+  padding: 0 18px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+#remote-shell .tabs > .tab-nav button.selected {
+  background: var(--accent) !important;
+  color: white !important;
+  box-shadow: 0 12px 26px rgba(255, 122, 24, 0.22);
+}
+
+#remote-shell .result-tabs > .tab-nav {
+  justify-content: flex-start;
+}
+
+#remote-shell .result-tabs .tabitem {
+  padding-top: 14px !important;
+}
+
+#remote-shell .metric-grid,
+#remote-shell .flag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+#remote-shell .metric-card,
+#remote-shell .flag-card,
+#remote-shell .empty-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 16px;
+}
+
+#remote-shell .metric-card h4,
+#remote-shell .flag-card h4,
+#remote-shell .empty-card h4 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+#remote-shell .metric-card strong,
+#remote-shell .flag-card strong {
+  display: block;
+  color: white;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+#remote-shell .flag-card {
+  border-color: rgba(255, 123, 123, 0.24);
+  background: rgba(64, 22, 29, 0.78);
+}
+
+#remote-shell .empty-card {
+  text-align: center;
+  color: var(--muted);
+}
+
+#remote-shell .empty-card h4 {
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 16px;
+}
+
+#remote-shell .status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+#remote-shell .status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+#remote-shell .status-pill b { color: white; }
+#remote-shell .status-ok { border-color: rgba(49, 196, 141, 0.28); }
+#remote-shell .status-bad { border-color: rgba(255, 123, 123, 0.28); }
+#remote-shell .status-warn { border-color: rgba(255, 180, 84, 0.28); }
+
+#remote-shell .primary-action button {
+  min-height: 54px;
+  border-radius: 8px !important;
+  border: none !important;
+  background: #f56d16 !important;
+  color: white !important;
+  font-size: 18px !important;
+  font-weight: 800 !important;
+  box-shadow: 0 18px 38px rgba(255, 122, 24, 0.24);
+}
+
+#remote-shell .secondary-action button {
+  min-height: 46px;
+  border-radius: 14px !important;
+}
+
+#remote-shell .gr-json,
+#remote-shell textarea {
+  min-height: 250px !important;
+}
+
+#remote-shell .results-file {
+  min-height: 160px;
+}
+"""
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Remote Gradio client for WD Tagger NAS API")
@@ -31,6 +205,116 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--share", action="store_true")
     return parser.parse_args()
+
+
+def render_empty_card(title: str, message: str) -> str:
+    return (
+        "<div class='empty-card'>"
+        f"<h4>{escape(title)}</h4>"
+        f"<p>{escape(message)}</p>"
+        "</div>"
+    )
+
+
+def render_metrics_html(metrics: dict[str, Any] | None) -> str:
+    if not metrics:
+        return render_empty_card("等待结果", "这里会显示推理耗时、资源占用和连接相关指标。")
+    parts = ["<div class='metric-grid'>"]
+    for key, value in metrics.items():
+        safe_value = "-" if value in {None, ""} else escape(str(value))
+        parts.append(
+            "<div class='metric-card'>"
+            f"<h4>{escape(str(key))}</h4>"
+            f"<strong>{safe_value}</strong>"
+            "</div>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def render_timing_html(timing: dict[str, Any] | None) -> str:
+    if not timing:
+        return render_empty_card("暂无耗时数据", "请求完成后，这里会显示前端耗时和后端处理耗时。")
+    localized = {
+        "后端处理耗时 (ms)": timing.get("backend_process_ms"),
+        "后端总耗时 (ms)": timing.get("backend_total_ms"),
+        "前端请求总耗时 (ms)": timing.get("client_total_ms"),
+    }
+    return render_metrics_html(localized)
+
+
+def render_flagged_html(payload: dict[str, Any] | list[Any] | str | None) -> str:
+    _, summary = build_flagged_summary(payload)
+    flagged_tags = list(summary.get("flagged_tags", []))
+    flagged_ratings = dict(summary.get("flagged_ratings", {}))
+    if not flagged_tags and not flagged_ratings:
+        return render_empty_card("未发现明显风险标签", "当前结果没有命中敏感评分或风险标签。")
+
+    cards: list[str] = ["<div class='flag-grid'>"]
+    if flagged_tags:
+        cards.append(
+            "<div class='flag-card'>"
+            "<h4>命中标签</h4>"
+            f"<strong>{escape(', '.join(str(tag) for tag in flagged_tags))}</strong>"
+            "</div>"
+        )
+    if flagged_ratings:
+        cards.append(
+            "<div class='flag-card'>"
+            "<h4>命中评分</h4>"
+            f"<strong>{escape(', '.join(f'{name}: {score}' for name, score in flagged_ratings.items()))}</strong>"
+            "</div>"
+        )
+    cards.append("</div>")
+    return "".join(cards)
+
+
+def render_batch_flagged_html(items: list[dict[str, Any]] | None) -> str:
+    if not items:
+        return render_empty_card("暂无风险摘要", "批量处理后，这里会汇总命中风险标签的文件。")
+
+    cards: list[str] = ["<div class='flag-grid'>"]
+    flagged_count = 0
+    for item in items:
+        _, summary = build_flagged_summary(item)
+        flagged_tags = list(summary.get("flagged_tags", []))
+        flagged_ratings = dict(summary.get("flagged_ratings", {}))
+        if not flagged_tags and not flagged_ratings:
+            continue
+        flagged_count += 1
+        details: list[str] = []
+        if flagged_tags:
+            details.append(", ".join(str(tag) for tag in flagged_tags))
+        if flagged_ratings:
+            details.append(", ".join(f"{name}: {score}" for name, score in flagged_ratings.items()))
+        cards.append(
+            "<div class='flag-card'>"
+            f"<h4>{escape(str(item.get('filename') or 'image'))}</h4>"
+            f"<strong>{escape(' | '.join(details))}</strong>"
+            "</div>"
+        )
+    cards.append("</div>")
+    if flagged_count == 0:
+        return render_empty_card("未发现明显风险标签", "当前批量结果没有命中需要特别提醒的文件。")
+    return "".join(cards)
+
+
+def render_health_html(payload: dict[str, Any] | None) -> str:
+    if not payload:
+        return render_empty_card("等待检测", "点击连接检测后，这里会显示远程 API 状态。")
+    if payload.get("error"):
+        return (
+            "<div class='status-strip'>"
+            f"<span class='status-pill status-bad'><b>连接失败</b>{escape(str(payload.get('error')))}</span>"
+            "</div>"
+        )
+    pills = [
+        "<span class='status-pill status-ok'><b>状态</b>连接正常</span>",
+        f"<span class='status-pill'><b>Repo</b>{escape(str(payload.get('repo_id') or '-'))}</span>",
+        f"<span class='status-pill'><b>Provider</b>{escape(', '.join(str(item) for item in payload.get('providers', [])) or '-')}</span>",
+        f"<span class='status-pill'><b>鉴权</b>{'已开启' if payload.get('auth_enabled') else '未开启'}</span>",
+    ]
+    return "<div class='status-strip'>" + "".join(pills) + "</div>"
 
 
 @dataclass(frozen=True)
@@ -141,29 +425,16 @@ class RemoteClient:
         metrics = self._parse_metrics(response)
 
         if "application/json" in content_type:
-            return RemoteResponse(
-                content_type=content_type,
-                filename=filename,
-                body=response.json(),
-                backend_process_ms=backend_process_ms,
-                backend_total_ms=backend_total_ms,
-                client_total_ms=client_total_ms,
-                metrics=metrics,
-            )
-        if content_type.startswith("text/plain"):
-            return RemoteResponse(
-                content_type=content_type,
-                filename=filename,
-                body=response.text,
-                backend_process_ms=backend_process_ms,
-                backend_total_ms=backend_total_ms,
-                client_total_ms=client_total_ms,
-                metrics=metrics,
-            )
+            body: str | bytes | dict | list = response.json()
+        elif content_type.startswith("text/plain"):
+            body = response.text
+        else:
+            body = response.content
+
         return RemoteResponse(
             content_type=content_type,
             filename=filename,
-            body=response.content,
+            body=body,
             backend_process_ms=backend_process_ms,
             backend_total_ms=backend_total_ms,
             client_total_ms=client_total_ms,
@@ -181,15 +452,11 @@ class RemoteClient:
     @staticmethod
     def _serialize_error(exc: Exception) -> dict[str, Any]:
         if isinstance(exc, httpx.HTTPStatusError):
-            detail: Any
             try:
-                detail = exc.response.json()
+                detail: Any = exc.response.json()
             except Exception:
                 detail = exc.response.text
-            return {
-                "error": f"Remote API returned HTTP {exc.response.status_code}",
-                "detail": detail,
-            }
+            return {"error": f"Remote API returned HTTP {exc.response.status_code}", "detail": detail}
         return {"error": str(exc)}
 
     def process_single(
@@ -202,9 +469,10 @@ class RemoteClient:
         general_mcut: bool,
         character_threshold: float,
         character_mcut: bool,
-    ) -> tuple[str, dict | list | None, str | None, dict[str, float | None]]:
+    ) -> tuple[str, dict | list | None, str, str, str | None, str, str]:
         if not image_path:
-            return "Please provide an image.", None, None, {}, {}
+            empty = render_empty_card("等待结果", "选择图像后再开始处理。")
+            return "请先提供一张图像。", None, empty, empty, None, empty, empty
 
         path = Path(image_path)
         try:
@@ -218,44 +486,36 @@ class RemoteClient:
                     "character_threshold": str(character_threshold),
                     "character_mcut": str(character_mcut).lower(),
                 },
-                files=[
-                    (
-                        "image",
-                        (
-                            path.name,
-                            path.read_bytes(),
-                            f"image/{path.suffix.lower().lstrip('.') or 'png'}",
-                        ),
-                    )
-                ],
+                files=[("image", (path.name, path.read_bytes(), f"image/{path.suffix.lower().lstrip('.') or 'png'}"))],
             )
         except Exception as exc:
-            return "", self._serialize_error(exc), None, {}, {}
+            payload = self._serialize_error(exc)
+            empty = render_empty_card("请求失败", "请检查远程地址、API Key 或远程服务状态。")
+            return "", payload, empty, empty, None, empty, empty
 
-        timing = self._build_timing_summary(
-            remote.backend_process_ms,
-            remote.backend_total_ms,
-            remote.client_total_ms,
-        )
+        timing = self._build_timing_summary(remote.backend_process_ms, remote.backend_total_ms, remote.client_total_ms)
+        metrics_html = render_metrics_html(localize_metrics(remote.metrics))
+        timing_html = render_timing_html(timing)
 
         if process_type == "tag":
-            return str(remote.body), None, None, timing, localize_metrics(remote.metrics)
+            flagged_html = render_flagged_html(str(remote.body))
+            return str(remote.body), {"caption": remote.body}, render_empty_card("文本模式", "当前模式只返回标签文本。"), flagged_html, None, timing_html, metrics_html
         if process_type == "arrary":
-            return "", remote.body if isinstance(remote.body, list) else [], None, timing, localize_metrics(remote.metrics)
-
+            flagged_html = render_flagged_html(remote.body if isinstance(remote.body, list) else [])
+            return "", remote.body if isinstance(remote.body, list) else [], render_empty_card("数组模式", "当前模式返回标签数组。"), flagged_html, None, timing_html, metrics_html
         if isinstance(remote.body, bytes):
             output_path = self._save_binary("tagimg", remote.filename or f"{path.stem}_tagged{path.suffix or '.png'}", remote.body)
-            return "", {
+            payload = {
                 "saved_file": output_path,
                 "remote_content_type": remote.content_type,
                 "timing": timing,
                 "metrics": remote.metrics,
-            }, output_path, timing, localize_metrics(remote.metrics)
+            }
+            return "", payload, render_empty_card("文件模式", "结果已写入本地文件，可在导出页签下载。"), render_empty_card("文件模式", "此模式主要返回写回标签后的图像文件。"), output_path, timing_html, metrics_html
 
         payload = remote.body if isinstance(remote.body, dict) else {"error": "Unexpected response"}
-        if isinstance(payload, dict):
-            payload = {**payload, "timing": timing, "metrics": remote.metrics}
-        return "", payload, None, timing, localize_metrics(remote.metrics)
+        flagged_html = render_flagged_html(payload)
+        return "", payload, render_empty_card("结构化结果", "此模式返回结构化内容，请查看 JSON 页签。"), flagged_html, None, timing_html, metrics_html
 
     def process_batch(
         self,
@@ -269,20 +529,11 @@ class RemoteClient:
         general_mcut: bool,
         character_threshold: float,
         character_mcut: bool,
-    ) -> tuple[dict | list, str | None, dict[str, float | None], dict[str, str]]:
+    ) -> tuple[dict | list, str, str, str | None, str, str]:
         uploads: list[tuple[str, tuple[str, bytes, str]]] = []
         for file_path in files or []:
             path = Path(file_path)
-            uploads.append(
-                (
-                    "images",
-                    (
-                        path.name,
-                        path.read_bytes(),
-                        f"image/{path.suffix.lower().lstrip('.') or 'png'}",
-                    ),
-                )
-            )
+            uploads.append(("images", (path.name, path.read_bytes(), f"image/{path.suffix.lower().lstrip('.') or 'png'}")))
 
         try:
             remote = self._request(
@@ -300,151 +551,155 @@ class RemoteClient:
                 files=uploads or None,
             )
         except Exception as exc:
-            return self._serialize_error(exc), None, {}, {}
+            payload = self._serialize_error(exc)
+            empty = render_empty_card("请求失败", "请检查远程地址、API Key 或远程服务状态。")
+            return payload, empty, empty, None, empty, empty
 
-        timing = self._build_timing_summary(
-            remote.backend_process_ms,
-            remote.backend_total_ms,
-            remote.client_total_ms,
-        )
+        timing = self._build_timing_summary(remote.backend_process_ms, remote.backend_total_ms, remote.client_total_ms)
+        timing_html = render_timing_html(timing)
+        metrics_html = render_metrics_html(localize_metrics(remote.metrics))
 
-        if isinstance(remote.body, (dict, list)):
-            if isinstance(remote.body, dict):
-                payload = {**remote.body, "timing": timing, "metrics": remote.metrics}
-                if isinstance(remote.body.get("metrics"), dict):
-                    payload["metrics_localized"] = localize_metrics(remote.body["metrics"])
-                return payload, None, timing, localize_metrics(remote.metrics)
-            return remote.body, None, timing, localize_metrics(remote.metrics)
+        if isinstance(remote.body, dict):
+            payload = {**remote.body, "timing": timing, "metrics": remote.metrics}
+            items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+            return payload, render_metrics_html({
+                "总文件数": len(items),
+                "成功处理": sum(1 for item in items if isinstance(item, dict) and item.get("ok", True)),
+                "批量模式": process_type,
+            }), render_batch_flagged_html(items), None, timing_html, metrics_html
+
+        if isinstance(remote.body, list):
+            payload = {"items": remote.body, "timing": timing}
+            return payload, render_empty_card("列表结果", "请查看 JSON 页签了解详细条目。"), render_empty_card("暂无风险摘要", "当前返回的是列表结构。"), None, timing_html, metrics_html
 
         if isinstance(remote.body, bytes):
             prefix = "json" if process_type == "json" else "mulitagimg"
             fallback_name = "results_bundle.zip" if process_type == "json" else "tagged_images.zip"
             output_path = self._save_binary(prefix, remote.filename or fallback_name, remote.body)
-            return {
+            payload = {
                 "type": process_type,
                 "saved_file": output_path,
                 "remote_content_type": remote.content_type,
                 "timing": timing,
                 "metrics": remote.metrics,
-                "metrics_localized": localize_metrics(remote.metrics) if isinstance(remote.metrics, dict) else None,
-            }, output_path, timing, localize_metrics(remote.metrics)
+            }
+            return payload, render_empty_card("文件已生成", "批量结果已经保存到本地导出目录。"), render_empty_card("导出模式", "此模式主要返回下载文件。"), output_path, timing_html, metrics_html
 
-        return {"error": "Unexpected response from remote API."}, None, timing, localize_metrics(remote.metrics)
+        payload = {"error": "Unexpected response from remote API."}
+        empty = render_empty_card("结果异常", "远程接口返回了未预期的内容。")
+        return payload, empty, empty, None, timing_html, metrics_html
 
-    def health(self, base_url: str, api_key: str) -> dict[str, Any]:
+    def health(self, base_url: str, api_key: str) -> tuple[dict[str, Any], str]:
         normalized_base = self._normalize_base_url(base_url)
         if not normalized_base:
-            return {"error": "Please provide the remote API base URL."}
+            payload = {"error": "Please provide the remote API base URL."}
+            return payload, render_health_html(payload)
 
         try:
             with httpx.Client(timeout=30.0) as client:
-                response = client.get(
-                    f"{normalized_base}/health",
-                    headers=self._headers(api_key),
-                )
+                response = client.get(f"{normalized_base}/health", headers=self._headers(api_key))
                 response.raise_for_status()
-            return response.json()
+            payload = response.json()
         except Exception as exc:
-            return self._serialize_error(exc)
+            payload = self._serialize_error(exc)
+        return payload, render_health_html(payload)
 
 
 def build_ui() -> gr.Blocks:
     client = RemoteClient()
 
-    with gr.Blocks(title="WaifuDiffusion Tagger Remote Client") as demo:
-        gr.Markdown("# WaifuDiffusion Tagger Remote Client")
-        gr.Markdown("This PC runs the frontend. The NAS processes images through the remote API.")
-        gr.Markdown("Local preserved frontend is kept separately in `/Gradio`.")
-        gr.Markdown(f"Current Python: `{sys.executable}`")
-        gr.Markdown(f"Local download/output directory: `{client.output_root}`")
+    with gr.Blocks(title="WaifuDiffusion Tagger Remote Client", elem_id="remote-shell") as demo:
+        with gr.Tabs():
+            with gr.Tab("连接设置"):
+                with gr.Row():
+                    with gr.Column(scale=11, min_width=520):
+                        api_base_url = gr.Textbox(value=DEFAULT_REMOTE_API_URL, label="远程 API 地址", placeholder="http://your-nas:8000")
+                        api_key = gr.Textbox(value=DEFAULT_REMOTE_API_KEY, label="API Key", type="password")
+                        health_button = gr.Button("检测远程连接", variant="primary", elem_classes=["primary-action"])
+                    with gr.Column(scale=9, min_width=420):
+                        with gr.Accordion("连接详情", open=False):
+                            health_status = gr.HTML(value=render_empty_card("等待检测", "点击连接检测后，这里会显示远程 API 状态。"))
+                            health_output = gr.JSON(label="健康检查结果")
 
-        with gr.Row():
-            api_base_url = gr.Textbox(
-                value=DEFAULT_REMOTE_API_URL,
-                label="Remote API base URL",
-                placeholder="http://10.1.0.2:8000",
-            )
-            api_key = gr.Textbox(
-                value=DEFAULT_REMOTE_API_KEY,
-                label="API Key",
-                type="password",
-            )
+            with gr.Tab("单张处理"):
+                with gr.Row():
+                    with gr.Column(scale=11, min_width=500):
+                        image = gr.Image(type="filepath", label="输入图像")
+                        process_type_single = gr.Dropdown(
+                            choices=[
+                                ("仅返回标签文本", "tag"),
+                                ("返回标签数组", "arrary"),
+                                ("导出写回标签图像", "tagimg"),
+                            ],
+                            value="tag",
+                            label="返回类型",
+                        )
+                        with gr.Row():
+                            general_threshold = gr.Slider(0, 1, value=DEFAULT_GENERAL_THRESHOLD, step=0.05, label="通用标签阈值")
+                            character_threshold = gr.Slider(0, 1, value=DEFAULT_CHARACTER_THRESHOLD, step=0.05, label="角色标签阈值")
+                        with gr.Row():
+                            general_mcut = gr.Checkbox(label="通用标签自动阈值（MCut）")
+                            character_mcut = gr.Checkbox(label="角色标签自动阈值（MCut）")
+                        submit_single = gr.Button("开始处理单张图像", variant="primary", elem_classes=["primary-action"])
 
-        with gr.Row():
-            general_threshold = gr.Slider(
-                0,
-                1,
-                value=DEFAULT_GENERAL_THRESHOLD,
-                step=0.05,
-                label="General threshold",
-            )
-            character_threshold = gr.Slider(
-                0,
-                1,
-                value=DEFAULT_CHARACTER_THRESHOLD,
-                step=0.05,
-                label="Character threshold",
-            )
-        with gr.Row():
-            general_mcut = gr.Checkbox(label="General use MCut")
-            character_mcut = gr.Checkbox(label="Character use MCut")
+                    with gr.Column(scale=9, min_width=420):
+                        with gr.Accordion("结果与详情", open=False):
+                            with gr.Tabs(elem_classes=["result-tabs"]):
+                                with gr.Tab("标签结果"):
+                                    single_text = gr.Textbox(label="标签输出", lines=5, max_lines=10)
+                                    single_summary = gr.HTML(value=render_empty_card("等待结果", "处理完成后，这里会显示当前模式的结果说明。"))
+                                with gr.Tab("结构化结果"):
+                                    single_json = gr.JSON(label="结构化结果")
+                                with gr.Tab("风险提示"):
+                                    single_flagged = gr.HTML(value=render_empty_card("暂无风险提示", "执行后这里会显示敏感标签和评分。"))
+                                with gr.Tab("导出文件"):
+                                    single_file = gr.File(label="下载文件", elem_classes=["results-file"])
+                                with gr.Tab("耗时指标"):
+                                    single_timing = gr.HTML(value=render_empty_card("暂无耗时数据", "请求完成后，这里会显示前端和后端耗时。"))
+                                    single_metrics = gr.HTML(value=render_empty_card("暂无资源指标", "请求完成后，这里会显示远端返回的资源指标。"))
 
-        with gr.Tab("Connection"):
-            with gr.Row():
-                health_button = gr.Button("Check NAS API", variant="primary")
-                health_output = gr.JSON(label="Health result")
+            with gr.Tab("批量处理"):
+                with gr.Row():
+                    with gr.Column(scale=11, min_width=500):
+                        batch_files = gr.File(file_count="multiple", file_types=["image"], type="filepath", label="上传图像到远程 API")
+                        input_dir = gr.Textbox(label="远程目录路径", placeholder="/volume2/Project/images")
+                        process_type_batch = gr.Dropdown(
+                            choices=[("生成 JSON 结果", "json"), ("导出写回标签图像", "mulitagimg")],
+                            value="json",
+                            label="批量模式",
+                        )
+                        export_format = gr.Dropdown(
+                            choices=[("仅内联结果", "inline"), ("仅 JSON 文件", "json"), ("仅 CSV 文件", "csv"), ("JSON + CSV", "both")],
+                            value="both",
+                            label="导出格式",
+                        )
+                        with gr.Row():
+                            batch_general_threshold = gr.Slider(0, 1, value=DEFAULT_GENERAL_THRESHOLD, step=0.05, label="通用标签阈值")
+                            batch_character_threshold = gr.Slider(0, 1, value=DEFAULT_CHARACTER_THRESHOLD, step=0.05, label="角色标签阈值")
+                        with gr.Row():
+                            batch_general_mcut = gr.Checkbox(label="通用标签自动阈值（MCut）")
+                            batch_character_mcut = gr.Checkbox(label="角色标签自动阈值（MCut）")
+                        submit_batch = gr.Button("开始批量处理", variant="primary", elem_classes=["primary-action"])
 
-        with gr.Tab("Single"):
-            with gr.Row():
-                with gr.Column():
-                    image = gr.Image(type="filepath", label="Input image")
-                    process_type_single = gr.Dropdown(
-                        SINGLE_TYPES,
-                        value="tag",
-                        label="Type",
-                    )
-                    submit_single = gr.Button("Process single", variant="primary")
-                with gr.Column():
-                    single_text = gr.Textbox(label="Tag output")
-                    single_json = gr.JSON(label="Structured output")
-                    single_file = gr.File(label="Downloaded file")
-                    single_timing = gr.JSON(label="Timing")
-                    single_metrics = gr.JSON(label="推理与资源信息")
-
-        with gr.Tab("Batch / Directory"):
-            with gr.Row():
-                with gr.Column():
-                    batch_files = gr.File(
-                        file_count="multiple",
-                        file_types=["image"],
-                        type="filepath",
-                        label="Upload images to NAS",
-                    )
-                    input_dir = gr.Textbox(
-                        label="NAS input directory",
-                        placeholder="/volume2/Project/images",
-                    )
-                    process_type_batch = gr.Dropdown(
-                        BATCH_TYPES,
-                        value="json",
-                        label="Type",
-                    )
-                    export_format = gr.Dropdown(
-                        EXPORT_FORMATS,
-                        value="both",
-                        label="Export format for type=json",
-                    )
-                    submit_batch = gr.Button("Process batch", variant="primary")
-                with gr.Column():
-                    batch_json = gr.JSON(label="Batch result")
-                    batch_file = gr.File(label="Downloaded file")
-                    batch_timing = gr.JSON(label="Timing")
-                    batch_metrics = gr.JSON(label="推理与资源信息")
+                    with gr.Column(scale=9, min_width=420):
+                        with gr.Accordion("结果与详情", open=False):
+                            with gr.Tabs(elem_classes=["result-tabs"]):
+                                with gr.Tab("处理摘要"):
+                                    batch_summary = gr.HTML(value=render_empty_card("等待批量结果", "执行批量处理后，这里会显示处理摘要。"))
+                                with gr.Tab("结构化结果"):
+                                    batch_json = gr.JSON(label="批量结果")
+                                with gr.Tab("风险摘要"):
+                                    batch_flagged = gr.HTML(value=render_empty_card("暂无风险摘要", "批量处理后，这里会汇总命中风险标签的文件。"))
+                                with gr.Tab("导出文件"):
+                                    batch_file = gr.File(label="下载文件", elem_classes=["results-file"])
+                                with gr.Tab("耗时指标"):
+                                    batch_timing = gr.HTML(value=render_empty_card("暂无耗时数据", "请求完成后，这里会显示前端和后端耗时。"))
+                                    batch_metrics = gr.HTML(value=render_empty_card("暂无资源指标", "请求完成后，这里会显示远端返回的资源指标。"))
 
         health_button.click(
             client.health,
             inputs=[api_base_url, api_key],
-            outputs=[health_output],
+            outputs=[health_output, health_status],
         )
         submit_single.click(
             client.process_single,
@@ -458,7 +713,7 @@ def build_ui() -> gr.Blocks:
                 character_threshold,
                 character_mcut,
             ],
-            outputs=[single_text, single_json, single_file, single_timing, single_metrics],
+            outputs=[single_text, single_json, single_summary, single_flagged, single_file, single_timing, single_metrics],
         )
         submit_batch.click(
             client.process_batch,
@@ -469,12 +724,12 @@ def build_ui() -> gr.Blocks:
                 input_dir,
                 process_type_batch,
                 export_format,
-                general_threshold,
-                general_mcut,
-                character_threshold,
-                character_mcut,
+                batch_general_threshold,
+                batch_general_mcut,
+                batch_character_threshold,
+                batch_character_mcut,
             ],
-            outputs=[batch_json, batch_file, batch_timing, batch_metrics],
+            outputs=[batch_json, batch_summary, batch_flagged, batch_file, batch_timing, batch_metrics],
         )
 
     return demo
@@ -482,9 +737,13 @@ def build_ui() -> gr.Blocks:
 
 def main() -> None:
     args = parse_args()
+    client = RemoteClient()
+    print(f"[client-api] Python: {sys.executable}")
+    print(f"[client-api] Output directory: {client.output_root}")
+    print(f"[client-api] Default remote API: {DEFAULT_REMOTE_API_URL}")
     app = build_ui()
     app.queue(max_size=8)
-    app.launch(server_name=args.host, server_port=args.port, share=args.share)
+    app.launch(server_name=args.host, server_port=args.port, share=args.share, css=APP_CSS)
 
 
 if __name__ == "__main__":

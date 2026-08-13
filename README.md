@@ -33,7 +33,7 @@ INSTALL_TRAINING=0 ./scripts/setup_macos.sh
 启动：
 
 ```bash
-./scripts/run_app_macos.sh
+./script/localModeLaunch.sh
 ```
 
 或：
@@ -68,7 +68,7 @@ macOS 默认使用 `CPUExecutionProvider`，避免误用 Windows/CUDA provider�
 启动：
 
 ```bash
-.venv/bin/python app.py --host 127.0.0.1 --port 7860
+./script/clientApiLaunch.sh
 ```
 
 浏览器打开：
@@ -97,7 +97,7 @@ export WD_TAGGER_REMOTE_API_KEY="your-api-key"
 启动：
 
 ```bash
-./scripts/run_api_macos.sh
+./script/serverApiOnlyLaunch.sh
 ```
 
 或：
@@ -213,6 +213,9 @@ outputs/finetune
 
 - `app.py`: 远程 NAS API 客户端 Gradio 界面
 - `Gradio/app.py`: 保留的本地 Gradio 界面
+- `script/clientApiLaunch.sh`: 远程 API 客户端前端启动脚本
+- `script/localModeLaunch.sh`: 本地 Gradio 启动脚本
+- `script/serverApiOnlyLaunch.sh`: 仅启动 API 的服务端脚本
 - `infer.py`: 命令行推理
 - `train.py`: 微调脚本
 - `infer_finetuned.py`: 微调权重推理
@@ -231,8 +234,8 @@ outputs/finetune
 
 启动 API：
 
-```powershell
-.\.venv\Scripts\python.exe api.py --host 127.0.0.1 --port 8000
+```bash
+./script/serverApiOnlyLaunch.sh
 ```
 
 接口文档：

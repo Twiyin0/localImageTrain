@@ -1,20 +1,18 @@
 # Local Gradio
 
-This folder preserves the current local Gradio frontend.
+本地模式统一从项目根目录启动：
 
-Start it from this directory:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run.ps1
+```bash
+./script/localModeLaunch.sh
 ```
 
-Or run directly:
+或直接运行：
 
-```powershell
-..\.venv\Scripts\python.exe .\app.py --host 127.0.0.1 --port 7860
+```bash
+.venv/bin/python Gradio/app.py --host 127.0.0.1 --port 7861
 ```
 
-Notes:
+说明：
 
-- This is the preserved local-processing frontend.
-- The main project root `app.py` is now the remote NAS API client frontend.
+- 这是本地推理模式
+- 根目录 `app.py` 是远程 API 客户端前端
