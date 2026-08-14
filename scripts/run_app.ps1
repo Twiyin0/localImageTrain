@@ -1,10 +1,10 @@
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$VenvPath = ".venv",
-    [string]$Host = "127.0.0.1",
+    [string]$ListenHost = "127.0.0.1",
     [int]$Port = 7860
 )
 
-$python = Join-Path $VenvPath "Scripts\python.exe"
-& $python app.py --host $Host --port $Port
+$ErrorActionPreference = "Stop"
+
+$projectRoot = Split-Path -Parent $PSScriptRoot
+& (Join-Path $projectRoot "scripts\run_in_windows_by_clientMode.ps1") -VenvPath $VenvPath -ListenHost $ListenHost -Port $Port

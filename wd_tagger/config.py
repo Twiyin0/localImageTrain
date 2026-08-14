@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 
 
 HF_SPACE_URL = "https://huggingface.co/spaces/SmilingWolf/wd-tagger"
@@ -30,3 +31,9 @@ def get_runtime_paths(project_root: str | Path | None = None) -> RuntimePaths:
     cache_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     return RuntimePaths(project_root=root, cache_dir=cache_dir, output_dir=output_dir)
+
+
+def get_default_onnx_providers() -> list[str]:
+    if sys.platform == "win32":
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    return ["CPUExecutionProvider"]

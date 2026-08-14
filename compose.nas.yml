@@ -17,3 +17,24 @@ services:
     volumes:
       - ./.cache:/app/.cache
       - ./models:/app/models
+
+  wd-tagger-webui:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: wd-tagger-webui
+    restart: unless-stopped
+    ports:
+      - "7861:7861"
+    env_file:
+      - .env.nas
+    environment:
+      HF_HOME: /app/.cache/huggingface
+      WD_TAGGER_PROVIDERS: CPUExecutionProvider
+      WD_TAGGER_REPO_ID: SmilingWolf/wd-convnext-tagger-v3
+      WD_TAGGER_MODEL_DIR: /app/models/wd-convnext-tagger-v3
+    volumes:
+      - ./.cache:/app/.cache
+      - ./models:/app/models
+      - ./outputs:/app/outputs
+    command: ["python", "Gradio/app.py", "--host", "0.0.0.0", "--port", "7861"]

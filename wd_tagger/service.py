@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import hashlib
 import json
 import os
 import sqlite3
+import platform
 import threading
+import subprocess
+import sys
+import re
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
-from time import time
+from time import perf_counter, process_time, time
 from typing import Any
 from uuid import uuid4
 import zipfile
@@ -30,6 +36,231 @@ from wd_tagger.utils import ensure_dir
 IMAGE_DESCRIPTION_TAG = ExifTags.Base.ImageDescription
 USER_COMMENT_TAG = 37510
 SQLITE_CACHE_FILENAME = "prediction_cache.sqlite3"
+DEFAULT_OUTPUT_FILENAME_TEMPLATE = "${origin_filename}_tagged${origin_ext}"
+DEFAULT_BATCH_ARCHIVE_TEMPLATE = "${origin_filename}_tagged.zip"
+WINDOWS_FORBIDDEN_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _bytes_to_mb(value: float) -> float:
+    return round(value / (1024 * 1024), 2)
+
+
+def sanitize_output_filename(filename: str, fallback: str = "output") -> str:
+    cleaned = WINDOWS_FORBIDDEN_FILENAME_CHARS.sub("_", Path(filename).name.strip())
+    cleaned = cleaned.strip(" .")
+    return cleaned or fallback
+
+
+def ensure_unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    index = 2
+    while True:
+        candidate = parent / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def render_output_filename(
+    template: str | None,
+    *,
+    origin_name: str,
+    default_ext: str,
+    process_type: str,
+    index: int | None = None,
+) -> str:
+    raw_template = (template or DEFAULT_OUTPUT_FILENAME_TEMPLATE).strip() or DEFAULT_OUTPUT_FILENAME_TEMPLATE
+    origin_path = Path(origin_name or "output")
+    now = datetime.now()
+    origin_ext = origin_path.suffix or default_ext
+    if not origin_ext.startswith("."):
+        origin_ext = f".{origin_ext}"
+    origin_filename = origin_path.stem or "output"
+    values = {
+        "origin_filename": origin_filename,
+        "origin_stem": origin_filename,
+        "origin_basename": origin_path.name or f"{origin_filename}{origin_ext}",
+        "origin_ext": origin_ext,
+        "ext": origin_ext,
+        "type": process_type,
+        "index": str(index or 1),
+        "date": now.strftime("%Y%m%d"),
+        "time": now.strftime("%H%M%S"),
+        "timestamp": now.strftime("%Y%m%d_%H%M%S"),
+    }
+    rendered = raw_template
+    for key, value in values.items():
+        rendered = rendered.replace("${" + key + "}", value)
+    if rendered.endswith(".xxx"):
+        rendered = rendered[:-4] + origin_ext
+    rendered = sanitize_output_filename(rendered)
+    if not Path(rendered).suffix:
+        rendered = f"{rendered}{default_ext}"
+    return rendered
+
+
+def _read_macos_current_rss_bytes() -> float | None:
+    class TimeValue(ctypes.Structure):
+        _fields_ = [("seconds", ctypes.c_int32), ("microseconds", ctypes.c_int32)]
+
+    class MachTaskBasicInfo(ctypes.Structure):
+        _fields_ = [
+            ("virtual_size", ctypes.c_uint64),
+            ("resident_size", ctypes.c_uint64),
+            ("resident_size_max", ctypes.c_uint64),
+            ("user_time", TimeValue),
+            ("system_time", TimeValue),
+            ("policy", ctypes.c_int32),
+            ("suspend_count", ctypes.c_int32),
+        ]
+
+    try:
+        libsystem = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+        libsystem.mach_task_self.restype = ctypes.c_uint32
+        libsystem.task_info.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_int,
+            ctypes.POINTER(ctypes.c_int),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        info = MachTaskBasicInfo()
+        count = ctypes.c_uint32(ctypes.sizeof(info) // ctypes.sizeof(ctypes.c_int))
+        result = libsystem.task_info(
+            libsystem.mach_task_self(),
+            20,  # MACH_TASK_BASIC_INFO
+            ctypes.cast(ctypes.byref(info), ctypes.POINTER(ctypes.c_int)),
+            ctypes.byref(count),
+        )
+        return float(info.resident_size) if result == 0 else None
+    except Exception:
+        return None
+
+
+def _read_current_rss_bytes() -> float | None:
+    if sys.platform == "darwin":
+        return _read_macos_current_rss_bytes()
+    if sys.platform.startswith("linux"):
+        status_path = Path("/proc/self/status")
+        if status_path.exists():
+            for line in status_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        return float(parts[1]) * 1024
+    try:
+        output = subprocess.check_output(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            text=True,
+        ).strip()
+        if output:
+            return float(output) * 1024
+    except Exception:
+        return None
+    return None
+
+
+def collect_process_metrics() -> dict[str, float | None]:
+    if os.name == "nt":
+        class FILETIME(ctypes.Structure):
+            _fields_ = [
+                ("dwLowDateTime", ctypes.c_uint32),
+                ("dwHighDateTime", ctypes.c_uint32),
+            ]
+
+        class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_uint32),
+                ("PageFaultCount", ctypes.c_uint32),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+                ("PrivateUsage", ctypes.c_size_t),
+            ]
+
+        def filetime_to_seconds(value: FILETIME) -> float:
+            raw = (int(value.dwHighDateTime) << 32) | int(value.dwLowDateTime)
+            return raw / 10_000_000.0
+
+        kernel32 = ctypes.windll.kernel32
+        psapi = ctypes.windll.psapi
+        handle = kernel32.GetCurrentProcess()
+        counters = PROCESS_MEMORY_COUNTERS_EX()
+        counters.cb = ctypes.sizeof(counters)
+        current_rss = None
+        peak_rss = None
+        if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            current_rss = float(counters.WorkingSetSize)
+            peak_rss = float(counters.PeakWorkingSetSize)
+        creation_time = FILETIME()
+        exit_time = FILETIME()
+        kernel_time = FILETIME()
+        user_time = FILETIME()
+        cpu_user_time = None
+        cpu_system_time = None
+        if kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation_time),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time),
+        ):
+            cpu_user_time = filetime_to_seconds(user_time)
+            cpu_system_time = filetime_to_seconds(kernel_time)
+        return {
+            "process_current_rss_mb": _bytes_to_mb(current_rss) if current_rss is not None else None,
+            "process_peak_rss_mb": _bytes_to_mb(peak_rss) if peak_rss is not None else None,
+            "cpu_user_time_s": round(cpu_user_time, 4) if cpu_user_time is not None else None,
+            "cpu_system_time_s": round(cpu_system_time, 4) if cpu_system_time is not None else None,
+        }
+
+    try:
+        import resource
+    except Exception:
+        return {
+            "process_current_rss_mb": None,
+            "process_peak_rss_mb": None,
+            "cpu_user_time_s": None,
+            "cpu_system_time_s": None,
+        }
+
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    rss_value = float(usage.ru_maxrss)
+    if platform.system() != "Darwin":
+        rss_value *= 1024
+    current_rss_bytes = _read_current_rss_bytes()
+    return {
+        "process_current_rss_mb": (
+            _bytes_to_mb(current_rss_bytes) if current_rss_bytes is not None else None
+        ),
+        "process_peak_rss_mb": _bytes_to_mb(rss_value),
+        "cpu_user_time_s": round(float(usage.ru_utime), 4),
+        "cpu_system_time_s": round(float(usage.ru_stime), 4),
+    }
+
+
+def localize_metrics(metrics: dict[str, Any] | None) -> dict[str, str]:
+    if not metrics:
+        return {}
+    current_rss = metrics.get("process_current_rss_mb")
+    peak_rss = metrics.get("process_peak_rss_mb")
+    return {
+        "总耗时": f"{metrics.get('total_elapsed_ms')} ms",
+        "模型推理耗时": f"{metrics.get('inference_elapsed_ms')} ms",
+        "本次 CPU 耗时": f"{metrics.get('cpu_elapsed_ms')} ms",
+        "当前进程内存占用": f"{current_rss} MB" if current_rss is not None else "不可用",
+        "当前进程内存峰值": f"{peak_rss} MB" if peak_rss is not None else "不可用",
+        "累计用户态 CPU 时间": f"{metrics.get('cpu_user_time_s')} s",
+        "累计内核态 CPU 时间": f"{metrics.get('cpu_system_time_s')} s",
+    }
 
 
 @dataclass(frozen=True)
@@ -143,8 +374,14 @@ class TaggerService:
     def _resolved_model_dir(model_dir: str | None) -> str | None:
         return str(Path(model_dir).resolve()) if model_dir else None
 
-    def _build_model_key(self, repo_id: str, model_dir: str | None) -> str:
-        return f"{repo_id}|{self._resolved_model_dir(model_dir) or ''}"
+    def _build_model_key(
+        self,
+        repo_id: str,
+        model_dir: str | None,
+        providers: list[str],
+    ) -> str:
+        provider_key = ",".join(str(provider) for provider in providers)
+        return f"{repo_id}|{self._resolved_model_dir(model_dir) or ''}|{provider_key}"
 
     @staticmethod
     def _cache_key(model_key: str, hash_value: str) -> tuple[str, str]:
@@ -477,7 +714,7 @@ class TaggerService:
         *,
         allow_similar: bool,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        model_key = self._build_model_key(options.repo_id, options.model_dir)
+        model_key = self._build_model_key(options.repo_id, options.model_dir, providers)
         source_md5 = self._hash_bytes(self._get_source_bytes(source))
         pixel_md5 = self._hash_bytes(self._image_to_png_bytes(source.image))
         signature = self._compute_visual_signature(source.image)
@@ -612,13 +849,27 @@ class TaggerService:
         *,
         allow_similar: bool = False,
     ) -> dict:
+        started_at = perf_counter()
+        cpu_started_at = process_time()
+        inference_started_at = perf_counter()
         raw, cache_info = self._predict_raw_from_source(
             source,
             options=options,
             providers=providers,
             allow_similar=allow_similar,
         )
-        return self._finalize_payload(raw, options, cache_info)
+        inference_elapsed_ms = round((perf_counter() - inference_started_at) * 1000, 2)
+        payload = self._finalize_payload(raw, options, cache_info)
+        metrics = collect_process_metrics()
+        metrics.update(
+            {
+                "total_elapsed_ms": round((perf_counter() - started_at) * 1000, 2),
+                "inference_elapsed_ms": inference_elapsed_ms,
+                "cpu_elapsed_ms": round((process_time() - cpu_started_at) * 1000, 2),
+            }
+        )
+        payload["metrics"] = metrics
+        return payload
 
     def predict_from_image(
         self,
@@ -664,13 +915,25 @@ class TaggerService:
             )
         return rows
 
-    def write_batch_json(self, output_dir: Path, payload: dict) -> Path:
-        path = output_dir / "results.json"
+    def write_batch_json(self, output_dir: Path, payload: dict, output_template: str | None = None) -> Path:
+        filename = render_output_filename(
+            output_template or "${origin_filename}${origin_ext}",
+            origin_name="results.json",
+            default_ext=".json",
+            process_type="json",
+        )
+        path = ensure_unique_path(output_dir / filename)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
-    def write_batch_csv(self, output_dir: Path, rows: list[dict[str, Any]]) -> Path:
-        path = output_dir / "results.csv"
+    def write_batch_csv(self, output_dir: Path, rows: list[dict[str, Any]], output_template: str | None = None) -> Path:
+        filename = render_output_filename(
+            output_template or "${origin_filename}${origin_ext}",
+            origin_name="results.csv",
+            default_ext=".csv",
+            process_type="json",
+        )
+        path = ensure_unique_path(output_dir / filename)
         with path.open("w", encoding="utf-8-sig", newline="") as file:
             writer = csv.DictWriter(
                 file,
@@ -680,11 +943,28 @@ class TaggerService:
             writer.writerows(rows)
         return path
 
-    def write_tagged_image(self, output_dir: Path, source: ImageSource, payload: dict) -> Path:
+    def write_tagged_image(
+        self,
+        output_dir: Path,
+        source: ImageSource,
+        payload: dict,
+        output_template: str | None = None,
+        index: int | None = None,
+    ) -> Path:
         suffix = Path(source.filename).suffix.lower()
         safe_suffix = suffix if suffix in {".png", ".jpg", ".jpeg", ".webp"} else ".png"
-        stem = Path(source.filename).stem
-        output_path = output_dir / f"{stem}_tagged{safe_suffix}"
+        output_filename = render_output_filename(
+            output_template,
+            origin_name=source.filename,
+            default_ext=safe_suffix,
+            process_type="tagimg",
+            index=index,
+        )
+        output_path = ensure_unique_path(output_dir / output_filename)
+        safe_suffix = output_path.suffix.lower()
+        if safe_suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            safe_suffix = ".png"
+            output_path = ensure_unique_path(output_path.with_suffix(".png"))
 
         caption = payload["caption"]
         tags = self.extract_tag_array(payload)
@@ -719,7 +999,7 @@ class TaggerService:
             save_image.save(output_path, exif=exif.tobytes())
             return output_path
         except Exception:
-            fallback = output_dir / f"{stem}_tagged.png"
+            fallback = ensure_unique_path(output_path.with_suffix(".png"))
             png_info = PngImagePlugin.PngInfo()
             png_info.add_text("Caption", caption)
             png_info.add_text("Tags", ", ".join(tags))
@@ -728,7 +1008,7 @@ class TaggerService:
             return fallback
 
     def zip_paths(self, output_dir: Path, archive_name: str, files: list[Path]) -> Path:
-        zip_path = output_dir / archive_name
+        zip_path = ensure_unique_path(output_dir / sanitize_output_filename(archive_name, "archive.zip"))
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for file in files:
                 archive.write(file, arcname=file.name)
@@ -742,8 +1022,15 @@ class TaggerService:
         output_dir: Path,
         payload: dict,
         rows: list[dict[str, Any]],
+        output_template: str | None = None,
     ) -> tuple[Path, Path, Path]:
-        json_path = self.write_batch_json(output_dir, payload)
-        csv_path = self.write_batch_csv(output_dir, rows)
-        zip_path = self.zip_paths(output_dir, "results_bundle.zip", [json_path, csv_path])
+        json_path = self.write_batch_json(output_dir, payload, output_template)
+        csv_path = self.write_batch_csv(output_dir, rows, output_template)
+        archive_name = render_output_filename(
+            output_template or "${origin_filename}_bundle${origin_ext}",
+            origin_name="results.zip",
+            default_ext=".zip",
+            process_type="json",
+        )
+        zip_path = self.zip_paths(output_dir, archive_name, [json_path, csv_path])
         return json_path, csv_path, zip_path

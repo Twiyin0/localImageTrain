@@ -1,5 +1,15 @@
 # WaifuDiffusion Tagger API
 
+Current API version: `1.3.2`
+
+Key capabilities:
+
+- API key authentication via `X-API-Key` or Bearer token
+- Multipart uploads remain compatible and are read in chunks internally
+- Raw stream upload for single images
+- Raw zip stream upload for batch processing
+- Timing headers on all processing responses
+
 ## Base URL
 
 - `http://<host>:8000`
@@ -71,6 +81,42 @@ Form fields:
 - `general_mcut`
 - `character_mcut`
 
+### Single image JSON from raw stream
+
+```http
+POST /tag/stream?filename=demo.jpg
+Content-Type: image/jpeg
+```
+
+This endpoint accepts the image as the raw request body, including chunked transfer from clients that support streaming uploads.
+
+Example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/tag/stream?filename=demo.jpg" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary "@demo.jpg"
+```
+
+### Batch image JSON from zip stream
+
+```http
+POST /tag/batch/stream?filename=images.zip
+Content-Type: application/zip
+```
+
+This endpoint accepts a zip archive as the raw request body. Supported image entries inside the zip: `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`.
+
+Example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/tag/batch/stream?filename=images.zip" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/zip" \
+  --data-binary "@images.zip"
+```
+
 ## Unified Endpoint
 
 ```http
@@ -89,13 +135,108 @@ Shared form fields:
 - `character_threshold`
 - `general_mcut`
 - `character_mcut`
+- `output_filename_template`: output filename template. Default is `${origin_filename}_tagged${origin_ext}`
 
 Optional inputs:
 
 - `image`: for single-image modes
+- `image_url`: for single-image modes using a network URL
 - `images`: for uploaded batch modes
+- `image_urls`: for batch modes using network URLs. Split multiple URLs with comma, semicolon, pipe, or newline
 - `input_dir`: server-side directory path for batch modes
 - `export_format`: only used by `type=json`, values are `inline`, `json`, `csv`, `both`
+
+## Stream Upload Endpoint
+
+```http
+POST /process/stream?type=tag&filename=demo.jpg
+Content-Type: image/jpeg
+```
+
+`/process/stream` keeps the original `/process` behavior while accepting raw streamed request bodies instead of `multipart/form-data`.
+
+Single-image modes expect an image body. Batch modes expect a zip body.
+
+Supported query parameters:
+
+- `type`: `tag`, `arrary`, `array`, `tagimg`, `json`, or `mulitagimg`
+- `filename`: optional original image filename or zip filename, used for type inference and output naming
+- `export_format`: only used by `type=json`, values are `inline`, `json`, `csv`, `both`
+- `general_threshold`
+- `character_threshold`
+- `general_mcut`
+- `character_mcut`
+- `output_filename_template`
+
+Notes:
+
+- Batch stream mode reads image files from a zip archive.
+- Batch modes can still use `/process` with multipart `images`, `image_urls`, or `input_dir`.
+- Existing `/process`, `/tag`, and `/tag/batch` clients remain compatible; multipart uploads are now read in chunks internally.
+
+Example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/process/stream?type=tag&filename=demo.jpg" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: image/jpeg" \
+  --data-binary "@demo.jpg"
+```
+
+Chunked streaming example with Python:
+
+```python
+import httpx
+
+def chunks(path, size=1024 * 1024):
+    with open(path, "rb") as file:
+        while data := file.read(size):
+            yield data
+
+response = httpx.post(
+    "http://10.1.0.2:8000/process/stream",
+    params={"type": "tag", "filename": "demo.jpg"},
+    headers={"X-API-Key": "your-api-key", "Content-Type": "image/jpeg"},
+    content=chunks("demo.jpg"),
+)
+response.raise_for_status()
+print(response.text)
+```
+
+Batch zip stream example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/process/stream?type=json&filename=images.zip&export_format=inline" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/zip" \
+  --data-binary "@images.zip"
+```
+
+Batch tagged-image zip stream example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/process/stream?type=mulitagimg&filename=images.zip" \
+  -H "X-API-Key: your-api-key" \
+  -H "Content-Type: application/zip" \
+  --data-binary "@images.zip" \
+  -o tagged_images.zip
+```
+
+Filename template variables:
+
+- `${origin_filename}`: original filename without extension
+- `${origin_basename}`: original filename with extension
+- `${origin_ext}` / `${ext}`: output extension, such as `.jpg`, `.png`, `.zip`, `.json`, `.csv`
+- `${type}`: process type, such as `tagimg` or `mulitagimg`
+- `${index}`: 1-based index in batch mode
+- `${date}` / `${time}` / `${timestamp}`: local server time
+
+Built-in template examples:
+
+- `${origin_filename}_tagged${origin_ext}`
+- `${origin_filename}${origin_ext}`
+- `${origin_filename}_${type}_${index}${origin_ext}`
+- `${origin_filename}_${timestamp}${origin_ext}`
 
 ## Supported `type` Values
 
@@ -115,6 +256,15 @@ curl -X POST "http://10.1.0.2:8000/process" \
   -H "X-API-Key: your-api-key" \
   -F "type=tag" \
   -F "image=@demo.jpg"
+```
+
+URL example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/process" \
+  -H "X-API-Key: your-api-key" \
+  -F "type=tag" \
+  -F "image_url=https://example.com/demo.jpg"
 ```
 
 ### `type=arrary`
@@ -160,8 +310,9 @@ Batch mode.
 Input:
 
 - uploaded `images`
+- `image_urls`
 - or `input_dir`
-- or both
+- or any combination of the above
 
 Output depends on `export_format`:
 
@@ -193,7 +344,7 @@ Example:
 curl -X POST "http://10.1.0.2:8000/process" \
   -H "X-API-Key: your-api-key" \
   -F "type=json" \
-  -F "input_dir=/volume2/Project/images" \
+  -F "image_urls=https://example.com/a.jpg;https://example.com/b.png" \
   -F "export_format=both"
 ```
 
@@ -204,14 +355,25 @@ Batch mode.
 Input:
 
 - uploaded `images`
+- `image_urls`
 - or `input_dir`
-- or both
+- or any combination of the above
 
 Output:
 
 - zip file
 - contains tagged images with metadata
 - also contains `results.json`
+
+Custom output filename example:
+
+```bash
+curl -X POST "http://10.1.0.2:8000/process" \
+  -H "X-API-Key: your-api-key" \
+  -F "type=tagimg" \
+  -F "image=@demo.jpg" \
+  -F 'output_filename_template=${origin_filename}_${timestamp}${origin_ext}'
+```
 
 ## Error Cases
 
@@ -235,7 +397,7 @@ Output:
 
 ```json
 {
-  "detail": "single-image types require the image field"
+  "detail": "single-image types require image or image_url"
 }
 ```
 
@@ -243,6 +405,6 @@ Output:
 
 ```json
 {
-  "detail": "batch types require images or input_dir"
+  "detail": "batch types require images, image_urls, or input_dir"
 }
 ```

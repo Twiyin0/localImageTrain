@@ -10,8 +10,8 @@
 推荐：
 
 - Python `3.11`
-- NVIDIA GPU
-- Windows 10/11
+- Windows 10/11、macOS 或 Linux
+- Windows 本地推理可使用 NVIDIA GPU；macOS/Linux 默认使用 CPU ONNX 运行时
 
 重要：
 
@@ -19,29 +19,41 @@
 - 请优先使用项目虚拟环境里的 Python：`.\.venv\Scripts\python.exe`
 - 这是为了避免误用全局环境中的 `onnxruntime-gpu`，尤其是 `1.27+` 默认会切到 `CUDA 13`
 
-先创建虚拟环境：
+Windows 一键安装：
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
+powershell -ExecutionPolicy Bypass -File scripts\app_setup.ps1
 ```
 
-如果你要训练，还需要安装和你 CUDA 匹配的 `PyTorch`。示例：
+macOS / Linux 一键安装：
+
+```bash
+sh scripts/app_setup.sh
+```
+
+如果你要训练，再额外加训练依赖：
 
 ```powershell
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-pip install -r requirements-train.txt
+powershell -ExecutionPolicy Bypass -File scripts\app_setup.ps1 -WithTraining -TorchIndexUrl https://download.pytorch.org/whl/cu121
 ```
 
-上面这个 `torch==2.5.1 / torchvision==0.20.1 / torchaudio==2.5.1 + cu121` 组合来自 PyTorch 官方历史版本安装页，适用于 Windows `pip + CUDA 12.1`。
-
-也可以直接一键安装：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+```bash
+WITH_TRAINING=1 sh scripts/app_setup.sh
 ```
+
+Windows 上面的 `torch + cu121` 组合适用于常见 CUDA 12.x 驱动；macOS/Linux 如果要训练，默认从 PyPI 安装对应平台的 PyTorch。
+
+统一脚本都放在 `scripts/`：
+
+- `scripts/app_setup.ps1` / `scripts/app_setup.sh`：一键安装运行环境
+- `scripts/run_in_windows_by_localMode.ps1`：Windows 本机模型推理前端
+- `scripts/run_in_windows_by_clientMode.ps1`：Windows 远程 API 客户端前端
+- `scripts/run_in_windows_by_serverMode.ps1`：Windows API 服务端
+- `scripts/run_in_macos_linux_by_localMode.sh`：macOS/Linux 本机模型推理前端
+- `scripts/run_in_macos_linux_by_clientMode.sh`：macOS/Linux 远程 API 客户端前端
+- `scripts/run_in_macos_linux_by_serverMode.sh`：macOS/Linux API 服务端
+
+这些 Linux 脚本已在 Debian NAS 上通过 `sh -n` 和 Docker API stream 验证。
 
 ## 2. 前端结构
 
@@ -49,6 +61,9 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 
 - 根目录 `app.py`：远程 NAS API 客户端前端，本机只负责上传和展示结果
 - `/Gradio/app.py`：保留的本地 Gradio 前端，继续使用本机模型推理
+- 前端已同步新版 UI：会显示耗时、远端资源占用、缓存命中、风险标签高亮，并在处理完成后自动展开结果区。
+- 图像输入支持本地上传和网络 URL；批量 URL 可用逗号、分号、竖线或换行分割。
+- 右下角 Gradio 原生 `settings` 可修改导出文件名模板，默认 `${origin_filename}_tagged${origin_ext}`，批量压缩包会使用 `.zip`。
 
 ## 3. 启动远程 NAS 客户端前端
 
@@ -59,7 +74,13 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 或直接：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_app.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_clientMode.ps1
+```
+
+macOS / Linux：
+
+```bash
+sh scripts/run_in_macos_linux_by_clientMode.sh
 ```
 
 浏览器打开：
@@ -76,13 +97,40 @@ http://10.1.0.2:8000
 
 在界面里可直接修改远程 API 地址和 API Key。
 
+远程前端默认指向 `http://10.1.0.2:8000`，也可以通过环境变量覆盖：
+
+```powershell
+$env:WD_TAGGER_REMOTE_API_URL = "http://your-nas:8000"
+$env:WD_TAGGER_REMOTE_API_KEY = "your-api-key"
+```
+
+三个统一启动入口都支持 `-ListenHost` / `-Port` 参数，也支持 `HOST` / `PORT` 环境变量：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_clientMode.ps1 -ListenHost 127.0.0.1 -Port 7860
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_localMode.ps1 -ListenHost 127.0.0.1 -Port 7861
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_serverMode.ps1 -ListenHost 127.0.0.1 -Port 8000
+```
+
+```bash
+HOST=127.0.0.1 PORT=7860 sh scripts/run_in_macos_linux_by_clientMode.sh
+HOST=127.0.0.1 PORT=7861 sh scripts/run_in_macos_linux_by_localMode.sh
+HOST=127.0.0.1 PORT=8000 sh scripts/run_in_macos_linux_by_serverMode.sh
+```
+
 ## 4. 启动保留的本地 Gradio 前端
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File Gradio\run.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_localMode.ps1
 ```
 
-或：
+macOS / Linux：
+
+```bash
+sh scripts/run_in_macos_linux_by_localMode.sh
+```
+
+也可以直接运行：
 
 ```powershell
 .\.venv\Scripts\python.exe Gradio\app.py --host 127.0.0.1 --port 7861
@@ -96,7 +144,7 @@ powershell -ExecutionPolicy Bypass -File Gradio\run.ps1
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip uninstall -y onnxruntime-gpu
-.\.venv\Scripts\python.exe -m pip install "onnxruntime-gpu>=1.21,<1.27"
+.\.venv\Scripts\python.exe -m pip install "onnxruntime-gpu==1.26.0" --force-reinstall
 ```
 
 之所以这样改，是因为根据 ONNX Runtime 官方 CUDA Execution Provider 文档，`1.27.x-1.29.x` 的 PyPI GPU 包默认基于 `CUDA 13.0 + cuDNN 9.x`；而 `1.21.x-1.26.x` 仍是 `CUDA 12.x + cuDNN 9.x` 路线，更适合和 `PyTorch cu121` 一起用。
@@ -273,7 +321,13 @@ outputs/finetune
 启动 API：
 
 ```powershell
-.\.venv\Scripts\python.exe api.py --host 127.0.0.1 --port 8000
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_serverMode.ps1
+```
+
+macOS / Linux：
+
+```bash
+sh scripts/run_in_macos_linux_by_serverMode.sh
 ```
 
 接口文档：
@@ -288,6 +342,13 @@ outputs/finetune
 POST /process
 ```
 
+流式单图接口：
+
+```text
+POST /process/stream?type=tag&filename=demo.png
+POST /tag/stream?filename=demo.png
+```
+
 支持的 `type`：
 
 - `tag`: 只返回 tag 文本
@@ -295,6 +356,18 @@ POST /process
 - `tagimg`: 返回带 tag 元数据的图片
 - `json`: 批量扫描目录或图片并输出 JSON/CSV
 - `mulitagimg`: 批量输出带元数据图片并打包 zip
+
+输入来源：
+
+- 单张模式：`image` 或 `image_url`
+- 批量模式：`images`、`image_urls`、`input_dir` 可组合使用
+- `image_urls` 支持用 `,`、`;`、`|` 或换行分割
+
+导出文件名模板：
+
+- 表单字段：`output_filename_template`
+- 默认：`${origin_filename}_tagged${origin_ext}`
+- 可用变量：`${origin_filename}`、`${origin_basename}`、`${origin_ext}`、`${type}`、`${index}`、`${date}`、`${time}`、`${timestamp}`
 
 所有处理接口还会在响应头里返回：
 
@@ -305,6 +378,24 @@ POST /process
 
 ```powershell
 curl.exe -X POST "http://127.0.0.1:8000/process" -H "X-API-Key: your-api-key" -F "type=tag" -F "image=@outputs/test_input.png"
+```
+
+流式上传示例：
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/process/stream?type=tag&filename=test_input.png" -H "X-API-Key: your-api-key" -H "Content-Type: image/png" --data-binary "@outputs/test_input.png"
+```
+
+批量 ZIP 流式上传示例：
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/process/stream?type=json&filename=images.zip&export_format=inline" -H "X-API-Key: your-api-key" -H "Content-Type: application/zip" --data-binary "@outputs/images.zip"
+```
+
+URL 批量示例：
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/process" -H "X-API-Key: your-api-key" -F "type=json" -F "image_urls=https://example.com/a.jpg;https://example.com/b.png" -F "export_format=inline"
 ```
 
 ## 12. NAS Docker 部署
@@ -318,6 +409,7 @@ docker compose -f compose.nas.yml up -d --build
 默认端口：
 
 - `8000` -> API
+- `7861` -> NAS WebUI
 
 默认使用：
 
