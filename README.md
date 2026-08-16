@@ -114,9 +114,11 @@ powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_serverMode.ps
 
 ```bash
 HOST=127.0.0.1 PORT=7860 sh scripts/run_in_macos_linux_by_clientMode.sh
-HOST=127.0.0.1 PORT=7861 sh scripts/run_in_macos_linux_by_localMode.sh
+HOST=0.0.0.0 PORT=7861 sh scripts/run_in_macos_linux_by_localMode.sh
 HOST=127.0.0.1 PORT=8000 sh scripts/run_in_macos_linux_by_serverMode.sh
 ```
+
+Linux 服务器或 Docker 外部访问 WebUI 时，本地模式必须监听 `0.0.0.0`；脚本默认已经使用该地址。若只在当前机器浏览器访问，可显式设置 `HOST=127.0.0.1`。此外还需要在服务器防火墙或云安全组放行 TCP `7861`。
 
 ## 4. 启动保留的本地 Gradio 前端
 
@@ -168,6 +170,20 @@ python Gradio\app.py --host 127.0.0.1 --port 7861
 $env:WD_TAGGER_MODEL_DIR = "E:\models\wd-convnext-tagger-v3"
 python Gradio\app.py --host 127.0.0.1 --port 7861
 ```
+
+也可以直接放到项目的 `models` 目录，启动时会优先扫描本地模型；发现完整模型后不会再访问 Hugging Face：
+
+```text
+models/
+  wd-vit-tagger-v3/
+    model.onnx
+    selected_tags.csv
+  wd-swinv2-tagger-v3/
+    model.onnx
+    selected_tags.csv
+```
+
+如果存在多个模型，会优先选择与 `WD_TAGGER_REPO_ID` 同名的目录，例如 `SmilingWolf/wd-vit-tagger-v3` 会优先使用 `models/wd-vit-tagger-v3`。
 
 ## 6. 命令行推理
 
@@ -416,7 +432,7 @@ docker compose -f compose.nas.yml up -d --build
 - `onnxruntime` CPU
 - `SmilingWolf/wd-convnext-tagger-v3`
 - API key auth via `.env.nas`
-- offline model directory via `models/wd-convnext-tagger-v3`
+- 模型默认在首次推理时自动下载到持久化缓存；离线部署可在 `.env.nas` 中设置 `WD_TAGGER_MODEL_DIR=/app/models/wd-convnext-tagger-v3`
 
 自动部署脚本：
 

@@ -19,6 +19,7 @@ from wd_tagger.config import (
     DEFAULT_CHARACTER_THRESHOLD,
     DEFAULT_GENERAL_THRESHOLD,
     DEFAULT_ONNX_REPO,
+    find_local_model_dir,
     get_default_onnx_providers,
 )
 from wd_tagger.modes import (
@@ -177,9 +178,12 @@ async def read_stream_zip_sources(
     return sources
 
 
-SERVICE = TaggerService()
 MODEL_REPO = os.getenv("WD_TAGGER_REPO_ID", DEFAULT_ONNX_REPO)
-MODEL_DIR = os.getenv("WD_TAGGER_MODEL_DIR")
+SERVICE = TaggerService()
+MODEL_DIR = os.getenv("WD_TAGGER_MODEL_DIR") or find_local_model_dir(
+    repo_id=MODEL_REPO,
+    project_root=SERVICE.runtime.project_root,
+)
 PROVIDERS = parse_provider_env()
 
 

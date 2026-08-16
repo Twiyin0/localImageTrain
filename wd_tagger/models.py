@@ -16,6 +16,8 @@ from wd_tagger.config import (
     DEFAULT_ONNX_REPO,
     LABEL_FILENAME,
     ONNX_FILENAME,
+    find_local_model_dir,
+    is_complete_model_dir,
 )
 
 
@@ -157,8 +159,14 @@ class OnnxTagger:
         self.cache_dir = str(Path(cache_dir).resolve()) if cache_dir else None
         self.providers = providers
         preload_cuda_runtime()
+        if not local_model_dir:
+            local_model_dir = find_local_model_dir(repo_id=repo_id)
         if local_model_dir:
             model_dir = Path(local_model_dir).resolve()
+            if not is_complete_model_dir(model_dir):
+                raise FileNotFoundError(
+                    f"Local model directory must contain {ONNX_FILENAME} and {LABEL_FILENAME}: {model_dir}"
+                )
             self.model_path = str((model_dir / ONNX_FILENAME).resolve())
             self.csv_path = str((model_dir / LABEL_FILENAME).resolve())
         else:

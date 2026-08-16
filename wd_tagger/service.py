@@ -28,6 +28,7 @@ from wd_tagger.config import (
     DEFAULT_CHARACTER_THRESHOLD,
     DEFAULT_GENERAL_THRESHOLD,
     DEFAULT_ONNX_REPO,
+    find_local_model_dir,
     get_runtime_paths,
 )
 from wd_tagger.models import OnnxTagger, mcut_threshold
@@ -356,7 +357,8 @@ class TaggerService:
         model_dir: str | None,
         providers: list[str],
     ) -> OnnxTagger:
-        key = (repo_id, model_dir, tuple(providers))
+        resolved_model_dir = self._resolve_model_dir(repo_id, model_dir)
+        key = (repo_id, resolved_model_dir, tuple(providers))
         cached = self._tagger_cache.get(key)
         if cached is not None:
             return cached
@@ -365,7 +367,7 @@ class TaggerService:
             repo_id=repo_id,
             cache_dir=self.runtime.cache_dir,
             providers=providers,
-            local_model_dir=model_dir,
+            local_model_dir=resolved_model_dir,
         )
         self._tagger_cache[key] = tagger
         return tagger
@@ -373,6 +375,12 @@ class TaggerService:
     @staticmethod
     def _resolved_model_dir(model_dir: str | None) -> str | None:
         return str(Path(model_dir).resolve()) if model_dir else None
+
+    def _resolve_model_dir(self, repo_id: str, model_dir: str | None) -> str | None:
+        return self._resolved_model_dir(model_dir) or find_local_model_dir(
+            repo_id=repo_id,
+            project_root=self.runtime.project_root,
+        )
 
     def _build_model_key(
         self,
@@ -714,7 +722,8 @@ class TaggerService:
         *,
         allow_similar: bool,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        model_key = self._build_model_key(options.repo_id, options.model_dir, providers)
+        model_dir = self._resolve_model_dir(options.repo_id, options.model_dir)
+        model_key = self._build_model_key(options.repo_id, model_dir, providers)
         source_md5 = self._hash_bytes(self._get_source_bytes(source))
         pixel_md5 = self._hash_bytes(self._image_to_png_bytes(source.image))
         signature = self._compute_visual_signature(source.image)
@@ -763,7 +772,7 @@ class TaggerService:
 
         tagger = self._get_tagger(
             repo_id=options.repo_id,
-            model_dir=options.model_dir,
+            model_dir=model_dir,
             providers=providers,
         )
         scores = tagger.predict(source.image)
@@ -775,7 +784,7 @@ class TaggerService:
         characters = [labels[idx] for idx in meta.character_indexes]
         raw = self._build_raw_prediction(
             repo_id=options.repo_id,
-            model_dir=self._resolved_model_dir(options.model_dir),
+            model_dir=model_dir,
             providers=tagger.active_providers,
             rating=rating,
             general=general,

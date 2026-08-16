@@ -19,7 +19,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from wd_tagger.config import DEFAULT_CHARACTER_THRESHOLD, DEFAULT_GENERAL_THRESHOLD, get_default_onnx_providers
+from wd_tagger.config import (
+    DEFAULT_CHARACTER_THRESHOLD,
+    DEFAULT_GENERAL_THRESHOLD,
+    discover_local_model_dirs,
+    get_default_onnx_providers,
+)
 from wd_tagger.content_flags import build_flagged_summary, extract_tags
 from wd_tagger.modes import load_sources_from_dir, load_sources_from_urls, process_batch_type
 from wd_tagger.service import (
@@ -642,15 +647,10 @@ APP_JS = build_settings_injection_js("local")
 
 
 def discover_local_models() -> list[tuple[str, str]]:
-    choices: list[tuple[str, str]] = []
-    if not LOCAL_MODELS_DIR.exists():
-        return choices
-    for model_dir in sorted(LOCAL_MODELS_DIR.iterdir()):
-        if not model_dir.is_dir():
-            continue
-        if (model_dir / "model.onnx").exists() and (model_dir / "selected_tags.csv").exists():
-            choices.append((model_dir.name, str(model_dir)))
-    return choices
+    return [
+        (model_dir.name, str(model_dir))
+        for model_dir in discover_local_model_dirs(project_root=PROJECT_ROOT)
+    ]
 
 
 def parse_args() -> argparse.Namespace:

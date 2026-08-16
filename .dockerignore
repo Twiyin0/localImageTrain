@@ -1,6 +1,12 @@
 .venv
+.git
 __pycache__
 .cache
+models
 outputs
+logs
+._*
 *.pyc
+.env
+.env.*
 .env.nas
