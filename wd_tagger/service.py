@@ -32,7 +32,7 @@ from wd_tagger.config import (
     get_runtime_paths,
 )
 from wd_tagger.models import OnnxTagger, mcut_threshold
-from wd_tagger.translation import translate_texts, translation_api_is_healthy
+from wd_tagger.translation import translate_terms_one_by_one, translation_api_is_healthy
 from wd_tagger.utils import ensure_dir
 
 IMAGE_DESCRIPTION_TAG = ExifTags.Base.ImageDescription
@@ -880,7 +880,7 @@ class TaggerService:
         if output_lang == "zh":
             general_names = [name for name, _ in ordered_general]
             character_names = [name for name, _ in ordered_characters]
-            translated_names = translate_texts(
+            translated_names = translate_terms_one_by_one(
                 options.translation_api_url,
                 [*general_names, *character_names],
                 source_lang="en",
