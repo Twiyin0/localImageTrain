@@ -180,7 +180,6 @@ async def read_stream_zip_sources(
 
 
 MODEL_REPO = os.getenv("WD_TAGGER_REPO_ID", DEFAULT_ONNX_REPO)
-DEFAULT_TRANSLATION_API_URL = os.getenv("WD_TAGGER_TRANSLATION_API_URL", "").strip() or None
 SERVICE = TaggerService()
 MODEL_DIR = os.getenv("WD_TAGGER_MODEL_DIR") or find_local_model_dir(
     repo_id=MODEL_REPO,
@@ -241,10 +240,8 @@ def build_options(
     general_mcut: bool,
     character_mcut: bool,
     lang: Literal["zh", "en"] | None = None,
-    translation_mode: str = "original",
-    translation_api_url: str | None = None,
+    translation_mode: str = "zh",
 ) -> PredictionOptions:
-    resolved_translation_api_url = (translation_api_url or "").strip() or DEFAULT_TRANSLATION_API_URL
     return PredictionOptions(
         repo_id=MODEL_REPO,
         model_dir=MODEL_DIR,
@@ -254,7 +251,6 @@ def build_options(
         character_mcut=character_mcut,
         lang=lang,
         translation_mode=translation_mode,
-        translation_api_url=resolved_translation_api_url,
     )
 
 
@@ -295,8 +291,7 @@ async def tag_image(
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
-    translation_mode: str = Form("original"),
-    translation_api_url: str | None = Form(None),
+    translation_mode: str = Form("zh"),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = perf_counter()
@@ -311,7 +306,6 @@ async def tag_image(
             character_mcut,
             lang,
             translation_mode,
-            translation_api_url,
         ),
         providers=PROVIDERS,
     )
@@ -331,8 +325,7 @@ async def tag_image_stream(
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
-    translation_mode: str = Query("original"),
-    translation_api_url: str | None = Query(None),
+    translation_mode: str = Query("zh"),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
@@ -348,7 +341,6 @@ async def tag_image_stream(
             character_mcut,
             lang,
             translation_mode,
-            translation_api_url,
         ),
         providers=PROVIDERS,
     )
@@ -367,8 +359,7 @@ async def tag_images_batch(
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
-    translation_mode: str = Form("original"),
-    translation_api_url: str | None = Form(None),
+    translation_mode: str = Form("zh"),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = perf_counter()
@@ -390,7 +381,6 @@ async def tag_images_batch(
             character_mcut,
             lang,
             translation_mode,
-            translation_api_url,
         ),
         providers=PROVIDERS,
         process_type="json",
@@ -411,8 +401,7 @@ async def tag_images_batch_stream(
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
-    translation_mode: str = Query("original"),
-    translation_api_url: str | None = Query(None),
+    translation_mode: str = Query("zh"),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
@@ -429,7 +418,6 @@ async def tag_images_batch_stream(
             character_mcut,
             lang,
             translation_mode,
-            translation_api_url,
         ),
         providers=PROVIDERS,
         process_type="json",
@@ -459,8 +447,7 @@ async def process_stream_endpoint(
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
-    translation_mode: str = Query("original"),
-    translation_api_url: str | None = Query(None),
+    translation_mode: str = Query("zh"),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> Response:
@@ -472,7 +459,6 @@ async def process_stream_endpoint(
         character_mcut,
         lang,
         translation_mode,
-        translation_api_url,
     )
 
     if type in SINGLE_TYPES:
@@ -530,8 +516,7 @@ async def process_endpoint(
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
-    translation_mode: str = Form("original"),
-    translation_api_url: str | None = Form(None),
+    translation_mode: str = Form("zh"),
     _: str = Security(require_api_key),
 ) -> Response:
     request_started = perf_counter()
@@ -542,7 +527,6 @@ async def process_endpoint(
         character_mcut,
         lang,
         translation_mode,
-        translation_api_url,
     )
 
     if type in SINGLE_TYPES:

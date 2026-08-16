@@ -38,8 +38,7 @@ from wd_tagger.service import (
 
 DEFAULT_PROVIDERS = get_default_onnx_providers()
 LOCAL_MODELS_DIR = PROJECT_ROOT / "models"
-DEFAULT_TRANSLATION_MODE = os.getenv("WD_TAGGER_TRANSLATION_MODE", "original").strip() or "original"
-DEFAULT_TRANSLATION_API_URL = os.getenv("WD_TAGGER_TRANSLATION_API_URL", "").strip()
+DEFAULT_TRANSLATION_MODE = os.getenv("WD_TAGGER_TRANSLATION_MODE", "zh").strip() or "zh"
 OUTPUT_TEMPLATE_CHOICES = [
     ("默认：原名_tagged.原后缀", DEFAULT_OUTPUT_FILENAME_TEMPLATE),
     ("保留原名", "${origin_filename}${origin_ext}"),
@@ -83,8 +82,7 @@ APP_I18N = gr.I18n(
             "label.batch_urls": "批量图像 URL",
             "label.input_dir": "本地目录路径",
             "label.local_model": "本地模型",
-            "label.translation_mode": "翻译模式",
-            "label.translation_api_url": "翻译 API 地址",
+            "label.translation_mode": "标签语言",
             "label.return_type": "返回类型",
             "label.batch_mode": "批量模式",
             "label.export_format": "导出格式",
@@ -100,17 +98,16 @@ APP_I18N = gr.I18n(
             "label.csv_file": "CSV 文件",
             "label.archive_file": "归档 / 导出文件",
             "accordion.results": "结果与详情",
-            "accordion.translation": "翻译设置",
+            "accordion.translation": "语言设置",
             "markdown.export_hint": "文件名规则在右下角原生 `settings` 中修改。默认：`${origin_filename}_tagged${origin_ext}`。",
             "placeholder.image_url": "https://example.com/image.png",
-            "placeholder.translation_api_url": "http://your-translator:8001",
             "placeholder.batch_urls": "多个 URL 可用逗号、分号、竖线或换行分割",
             "placeholder.input_dir": r"E:\images",
             "choice.tag": "仅返回标签文本",
             "choice.arrary": "返回标签数组",
             "choice.tagimg": "导出写回标签图像",
             "choice.original": "保留原文",
-            "choice.translate_zh": "翻译为中文",
+            "choice.translate_zh": "中文对照表",
             "choice.json": "生成 JSON 结果",
             "choice.mulitagimg": "导出写回标签图像",
             "choice.inline": "仅内联结果",
@@ -139,8 +136,7 @@ APP_I18N = gr.I18n(
             "label.batch_urls": "Batch Image URLs",
             "label.input_dir": "Local Directory",
             "label.local_model": "Local Model",
-            "label.translation_mode": "Translation Mode",
-            "label.translation_api_url": "Translation API URL",
+            "label.translation_mode": "Tag Language",
             "label.return_type": "Return Type",
             "label.batch_mode": "Batch Mode",
             "label.export_format": "Export Format",
@@ -156,17 +152,16 @@ APP_I18N = gr.I18n(
             "label.csv_file": "CSV File",
             "label.archive_file": "Archive / Export File",
             "accordion.results": "Results and Details",
-            "accordion.translation": "Translation Settings",
+            "accordion.translation": "Language Settings",
             "markdown.export_hint": "Edit the filename rule in the native `settings` link at the bottom-right. Default: `${origin_filename}_tagged${origin_ext}`.",
             "placeholder.image_url": "https://example.com/image.png",
-            "placeholder.translation_api_url": "http://your-translator:8001",
             "placeholder.batch_urls": "Separate multiple URLs with comma, semicolon, pipe, or newline",
             "placeholder.input_dir": r"E:\images",
             "choice.tag": "Return tag text only",
             "choice.arrary": "Return tag array",
             "choice.tagimg": "Export image with metadata",
             "choice.original": "Keep original",
-            "choice.translate_zh": "Translate to Chinese",
+            "choice.translate_zh": "Chinese table",
             "choice.json": "Generate JSON result",
             "choice.mulitagimg": "Export tagged images",
             "choice.inline": "Inline result only",
@@ -530,16 +525,11 @@ APP_CSS = """
 
 def build_settings_injection_js(scope: str) -> str:
     storage_key = f"wd_tagger_{scope}_output_filename_template"
-    translation_storage_key = f"wd_tagger_{scope}_translation_api_url"
     textbox_selector = f"#{scope}-output-filename-template textarea, #{scope}-output-filename-template input"
-    translation_selector = f"#{scope}-translation-api-url textarea, #{scope}-translation-api-url input"
     payload = {
         "storageKey": storage_key,
-        "translationStorageKey": translation_storage_key,
         "textboxSelector": textbox_selector,
-        "translationSelector": translation_selector,
         "defaultTemplate": DEFAULT_OUTPUT_FILENAME_TEMPLATE,
-        "defaultTranslationApiUrl": DEFAULT_TRANSLATION_API_URL,
         "presets": OUTPUT_TEMPLATE_PRESETS,
         "zh": {
             "title": "导出文件名规则",
@@ -549,12 +539,6 @@ def build_settings_injection_js(scope: str) -> str:
             "help": "可用变量：${origin_filename}, ${origin_basename}, ${origin_ext}, ${type}, ${index}, ${date}, ${time}, ${timestamp}",
             "save": "保存导出规则",
             "saved": "已保存",
-            "translationTitle": "翻译 API 设置",
-            "translationDescription": "这里会同步到翻译请求使用的 API 地址。留空时会自动回退为原文。",
-            "translationLabel": "翻译 API 地址",
-            "translationPlaceholder": "http://your-translator:8001",
-            "translationHelp": "建议填写翻译服务的 Base URL，保存后会同步到主界面设置。",
-            "translationSave": "保存翻译设置",
         },
         "en": {
             "title": "Export Filename Rule",
@@ -564,12 +548,6 @@ def build_settings_injection_js(scope: str) -> str:
             "help": "Variables: ${origin_filename}, ${origin_basename}, ${origin_ext}, ${type}, ${index}, ${date}, ${time}, ${timestamp}",
             "save": "Save Export Rule",
             "saved": "Saved",
-            "translationTitle": "Translation API Settings",
-            "translationDescription": "This value is used for translation requests. Leave it empty to keep the original text.",
-            "translationLabel": "Translation API URL",
-            "translationPlaceholder": "http://your-translator:8001",
-            "translationHelp": "Set the translation service base URL here; it will sync back to the main page input.",
-            "translationSave": "Save Translation Setting",
         },
     }
     config = json.dumps(payload, ensure_ascii=False)
@@ -601,17 +579,8 @@ def build_settings_injection_js(scope: str) -> str:
     setNativeValue(textbox, value || config.defaultTemplate);
   }}
 
-  function syncTranslationTextbox(value) {{
-    const textbox = document.querySelector(config.translationSelector);
-    setNativeValue(textbox, value || config.defaultTranslationApiUrl || "");
-  }}
-
   function getStoredTemplate() {{
     return localStorage.getItem(config.storageKey) || config.defaultTemplate;
-  }}
-
-  function getStoredTranslationUrl() {{
-    return localStorage.getItem(config.translationStorageKey) || config.defaultTranslationApiUrl || "";
   }}
 
   function findSettingsRoot() {{
@@ -623,10 +592,8 @@ def build_settings_injection_js(scope: str) -> str:
     const locale = currentLocale();
     const t = config[locale] || config.zh;
     const current = getStoredTemplate();
-    const currentTranslation = getStoredTranslationUrl();
     if (panel.dataset.rendered === "1" && panel.dataset.locale === locale) {{
       syncHiddenTextbox(current);
-      syncTranslationTextbox(currentTranslation);
       return;
     }}
     panel.dataset.rendered = "1";
@@ -643,21 +610,11 @@ def build_settings_injection_js(scope: str) -> str:
       <p>${{t.help}}</p>
       <button type="button" id="${{config.storageKey}}-save">${{t.save}}</button>
       <span class="wd-settings-status" id="${{config.storageKey}}-status"></span>
-      <h2 style="margin-top: 22px;">${{t.translationTitle}}</h2>
-      <p>${{t.translationDescription}}</p>
-      <label for="${{config.translationStorageKey}}-input">${{t.translationLabel}}</label>
-      <input id="${{config.translationStorageKey}}-input" value="${{currentTranslation.replaceAll('"', "&quot;")}}" placeholder="${{t.translationPlaceholder}}" />
-      <p>${{t.translationHelp}}</p>
-      <button type="button" id="${{config.translationStorageKey}}-save">${{t.translationSave}}</button>
-      <span class="wd-settings-status" id="${{config.translationStorageKey}}-status"></span>
     `;
     const preset = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-preset`);
     const input = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-input`);
     const save = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-save`);
     const status = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-status`);
-    const translationInput = panel.querySelector(`#${{CSS.escape(config.translationStorageKey)}}-input`);
-    const translationSave = panel.querySelector(`#${{CSS.escape(config.translationStorageKey)}}-save`);
-    const translationStatus = panel.querySelector(`#${{CSS.escape(config.translationStorageKey)}}-status`);
     const matched = config.presets.find((item) => item.value === current);
     preset.value = matched ? matched.value : "";
     preset.addEventListener("change", () => {{
@@ -671,14 +628,6 @@ def build_settings_injection_js(scope: str) -> str:
       window.setTimeout(() => (status.textContent = ""), 1600);
     }});
     syncHiddenTextbox(current);
-    translationSave.addEventListener("click", () => {{
-      const value = translationInput.value.trim() || "";
-      localStorage.setItem(config.translationStorageKey, value);
-      syncTranslationTextbox(value);
-      translationStatus.textContent = t.saved;
-      window.setTimeout(() => (translationStatus.textContent = ""), 1600);
-    }});
-    syncTranslationTextbox(currentTranslation);
   }}
 
   function inject() {{
@@ -697,7 +646,6 @@ def build_settings_injection_js(scope: str) -> str:
 
   function syncStoredValues() {{
     syncHiddenTextbox(getStoredTemplate());
-    syncTranslationTextbox(getStoredTranslationUrl());
   }}
 
   syncStoredValues();
@@ -891,7 +839,6 @@ class Predictor:
         character_threshold: float,
         character_mcut: bool,
         translation_mode: str,
-        translation_api_url: str,
     ) -> PredictionOptions:
         return PredictionOptions(
             model_dir=model_dir or self.local_model_dir,
@@ -900,7 +847,6 @@ class Predictor:
             general_mcut=general_mcut,
             character_mcut=character_mcut,
             translation_mode=translation_mode,
-            translation_api_url=translation_api_url.strip(),
         )
 
     @staticmethod
@@ -963,7 +909,6 @@ class Predictor:
                     character_threshold=DEFAULT_CHARACTER_THRESHOLD,
                     character_mcut=False,
                     translation_mode=DEFAULT_TRANSLATION_MODE,
-                    translation_api_url=DEFAULT_TRANSLATION_API_URL,
                 ),
                 providers=DEFAULT_PROVIDERS,
             )
@@ -993,7 +938,6 @@ class Predictor:
         image_url: str,
         model_dir: str,
         translation_mode: str,
-        translation_api_url: str,
         process_type: str,
         output_filename_template: str,
         general_threshold: float,
@@ -1047,7 +991,6 @@ class Predictor:
                 character_threshold=character_threshold,
                 character_mcut=character_mcut,
                 translation_mode=translation_mode,
-                translation_api_url=translation_api_url,
             ),
             providers=DEFAULT_PROVIDERS,
         )
@@ -1072,7 +1015,6 @@ class Predictor:
         input_dir: str,
         model_dir: str,
         translation_mode: str,
-        translation_api_url: str,
         process_type: str,
         export_format: str,
         output_filename_template: str,
@@ -1112,7 +1054,6 @@ class Predictor:
                 character_threshold=character_threshold,
                 character_mcut=character_mcut,
                 translation_mode=translation_mode,
-                translation_api_url=translation_api_url,
             ),
             providers=DEFAULT_PROVIDERS,
             process_type=process_type,
@@ -1208,12 +1149,6 @@ def build_ui() -> gr.Blocks:
                 ],
                 value=DEFAULT_TRANSLATION_MODE,
                 label=t("label.translation_mode"),
-            )
-            translation_api_url = gr.Textbox(
-                value=DEFAULT_TRANSLATION_API_URL,
-                label=t("label.translation_api_url"),
-                placeholder=t("placeholder.translation_api_url"),
-                elem_id="local-translation-api-url",
             )
         with gr.Tabs() as main_tabs:
             with gr.Tab(t("tab.single")):
@@ -1336,7 +1271,6 @@ def build_ui() -> gr.Blocks:
                 single_image_url,
                 single_model,
                 translation_mode,
-                translation_api_url,
                 process_type_single,
                 output_filename_template,
                 single_general_threshold,
@@ -1355,7 +1289,6 @@ def build_ui() -> gr.Blocks:
                 batch_input_dir,
                 batch_model,
                 translation_mode,
-                translation_api_url,
                 process_type_batch,
                 export_format,
                 output_filename_template,

@@ -7,7 +7,7 @@
 - Do not commit or sync large/generated data: `.venv`, `.cache`, `outputs`, `logs`, `models`, `.env*`, `.git`, or AppleDouble `._*` files.
 - `wd_tagger/app.py` is the remote API client UI, `Gradio/app.py` is the local Gradio UI, and `wd_tagger/api.py` is the HTTP API.
 - Keep UI and API behavior aligned when adding features, but keep changes small and focused.
-- Translation is optional. If the translation API is not configured or not reachable, fall back to the original tags/text without failing the main inference flow.
+- Tag translation must stay deterministic and offline. Do not use a translation API; Chinese tag output comes from `datasets/selected_tags_cn.csv`.
 
 ## Constraints
 

@@ -64,6 +64,7 @@ Windows 上面的 `torch + cu121` 组合适用于常见 CUDA 12.x 驱动；macOS
 - 前端已同步新版 UI：会显示耗时、远端资源占用、缓存命中、风险标签高亮，并在处理完成后自动展开结果区。
 - 图像输入支持本地上传和网络 URL；批量 URL 可用逗号、分号、竖线或换行分割。
 - 右下角 Gradio 原生 `settings` 可修改导出文件名模板，默认 `${origin_filename}_tagged${origin_ext}`，批量压缩包会使用 `.zip`。
+- 标签语言支持原文和中文。中文输出不再调用翻译 API，而是使用 `datasets/selected_tags_cn.csv` 的离线对照表；要改日常用词，直接改这个 CSV 的 `translatedname`。
 
 ## 3. 启动远程 NAS 客户端前端
 

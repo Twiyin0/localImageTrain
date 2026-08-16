@@ -15,7 +15,6 @@ services:
       WD_TAGGER_MODELS_DIR: /app/models
       WD_TAGGER_PROVIDERS: CPUExecutionProvider
       WD_TAGGER_REPO_ID: SmilingWolf/wd-convnext-tagger-v3
-      WD_TAGGER_TRANSLATION_API_URL: http://10.10.1.9:8001
       NO_PROXY: localhost,127.0.0.1,0.0.0.0
       no_proxy: localhost,127.0.0.1,0.0.0.0
     volumes:
@@ -40,7 +39,6 @@ services:
       WD_TAGGER_MODELS_DIR: /app/models
       WD_TAGGER_PROVIDERS: CPUExecutionProvider
       WD_TAGGER_REPO_ID: SmilingWolf/wd-convnext-tagger-v3
-      WD_TAGGER_TRANSLATION_API_URL: http://10.10.1.9:8001
       NO_PROXY: localhost,127.0.0.1,0.0.0.0
       no_proxy: localhost,127.0.0.1,0.0.0.0
     volumes:

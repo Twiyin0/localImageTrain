@@ -32,7 +32,7 @@ from wd_tagger.config import (
     get_runtime_paths,
 )
 from wd_tagger.models import OnnxTagger, mcut_threshold
-from wd_tagger.translation import translate_terms_one_by_one, translation_api_is_healthy
+from wd_tagger.translation import translate_terms_from_table
 from wd_tagger.utils import ensure_dir
 
 IMAGE_DESCRIPTION_TAG = ExifTags.Base.ImageDescription
@@ -300,9 +300,7 @@ class PredictionOptions:
     general_mcut: bool = False
     character_mcut: bool = False
     lang: str | None = None
-    translation_mode: str = "original"
-    translation_api_url: str | None = None
-    translation_timeout_s: float = 8.0
+    translation_mode: str = "zh"
 
 
 class TaggerService:
@@ -741,15 +739,9 @@ class TaggerService:
             return explicit_lang, explicit_lang == "zh"
 
         legacy_mode = self._normalize_translation_mode(options.translation_mode)
-        if legacy_mode == "zh":
-            return "zh", True
-
-        if options.translation_api_url and translation_api_is_healthy(
-            options.translation_api_url,
-            timeout_s=options.translation_timeout_s,
-        ):
-            return "zh", True
-        return "en", False
+        if legacy_mode == "original":
+            return "en", False
+        return "zh", True
 
     def _predict_raw_from_source(
         self,
@@ -880,13 +872,7 @@ class TaggerService:
         if output_lang == "zh":
             general_names = [name for name, _ in ordered_general]
             character_names = [name for name, _ in ordered_characters]
-            translated_names = translate_terms_one_by_one(
-                options.translation_api_url,
-                [*general_names, *character_names],
-                source_lang="en",
-                target_lang="zh",
-                timeout_s=options.translation_timeout_s,
-            )
+            translated_names = translate_terms_from_table([*general_names, *character_names])
             if translated_names and len(translated_names) == len(general_names) + len(character_names):
                 translated = True
                 translated_general_names = translated_names[: len(general_names)]
@@ -920,7 +906,7 @@ class TaggerService:
             "translation": {
                 "lang": output_lang,
                 "mode": translation_mode,
-                "endpoint": options.translation_api_url if translation_requested else None,
+                "source": "datasets/selected_tags_cn.csv" if translated else None,
                 "available": translated,
                 "requested": translation_requested,
             },

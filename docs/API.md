@@ -55,18 +55,18 @@ Example response:
 
 所有处理接口都支持可选参数 `lang`：
 
-- `lang=zh`：优先输出中文
+- `lang=zh`：使用 `datasets/selected_tags_cn.csv` 输出中文标签
 - `lang=en`：输出原文
-- 不传 `lang` 时，如果翻译 API 可用，默认输出 `zh`
-- 不传 `lang` 且翻译 API 不可用时，默认输出 `en`
+- 不传 `lang` 时，默认输出 `zh`
 
-翻译服务不可用时，主流程不会失败，只会回退为原文输出。
+项目已经彻底放弃翻译 API。中文标签完全离线、确定性输出；需要调整词语时，直接修改 `datasets/selected_tags_cn.csv` 的 `translatedname`。
 
 JSON 响应里会保留：
 
 - `caption_original`：原始标签串
 - `caption_display`：当前输出语言对应的展示标签串
 - `translation.lang`：请求/默认选择的输出语言
+- `translation.source`：中文输出使用的对照表路径
 
 ## Legacy Endpoints
 
