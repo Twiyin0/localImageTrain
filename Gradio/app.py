@@ -38,6 +38,8 @@ from wd_tagger.service import (
 
 DEFAULT_PROVIDERS = get_default_onnx_providers()
 LOCAL_MODELS_DIR = PROJECT_ROOT / "models"
+DEFAULT_TRANSLATION_MODE = os.getenv("WD_TAGGER_TRANSLATION_MODE", "original").strip() or "original"
+DEFAULT_TRANSLATION_API_URL = os.getenv("WD_TAGGER_TRANSLATION_API_URL", "").strip()
 OUTPUT_TEMPLATE_CHOICES = [
     ("默认：原名_tagged.原后缀", DEFAULT_OUTPUT_FILENAME_TEMPLATE),
     ("保留原名", "${origin_filename}${origin_ext}"),
@@ -81,6 +83,8 @@ APP_I18N = gr.I18n(
             "label.batch_urls": "批量图像 URL",
             "label.input_dir": "本地目录路径",
             "label.local_model": "本地模型",
+            "label.translation_mode": "翻译模式",
+            "label.translation_api_url": "翻译 API 地址",
             "label.return_type": "返回类型",
             "label.batch_mode": "批量模式",
             "label.export_format": "导出格式",
@@ -96,13 +100,17 @@ APP_I18N = gr.I18n(
             "label.csv_file": "CSV 文件",
             "label.archive_file": "归档 / 导出文件",
             "accordion.results": "结果与详情",
+            "accordion.translation": "翻译设置",
             "markdown.export_hint": "文件名规则在右下角原生 `settings` 中修改。默认：`${origin_filename}_tagged${origin_ext}`。",
             "placeholder.image_url": "https://example.com/image.png",
+            "placeholder.translation_api_url": "http://your-translator:8001",
             "placeholder.batch_urls": "多个 URL 可用逗号、分号、竖线或换行分割",
             "placeholder.input_dir": r"E:\images",
             "choice.tag": "仅返回标签文本",
             "choice.arrary": "返回标签数组",
             "choice.tagimg": "导出写回标签图像",
+            "choice.original": "保留原文",
+            "choice.translate_zh": "翻译为中文",
             "choice.json": "生成 JSON 结果",
             "choice.mulitagimg": "导出写回标签图像",
             "choice.inline": "仅内联结果",
@@ -131,6 +139,8 @@ APP_I18N = gr.I18n(
             "label.batch_urls": "Batch Image URLs",
             "label.input_dir": "Local Directory",
             "label.local_model": "Local Model",
+            "label.translation_mode": "Translation Mode",
+            "label.translation_api_url": "Translation API URL",
             "label.return_type": "Return Type",
             "label.batch_mode": "Batch Mode",
             "label.export_format": "Export Format",
@@ -146,13 +156,17 @@ APP_I18N = gr.I18n(
             "label.csv_file": "CSV File",
             "label.archive_file": "Archive / Export File",
             "accordion.results": "Results and Details",
+            "accordion.translation": "Translation Settings",
             "markdown.export_hint": "Edit the filename rule in the native `settings` link at the bottom-right. Default: `${origin_filename}_tagged${origin_ext}`.",
             "placeholder.image_url": "https://example.com/image.png",
+            "placeholder.translation_api_url": "http://your-translator:8001",
             "placeholder.batch_urls": "Separate multiple URLs with comma, semicolon, pipe, or newline",
             "placeholder.input_dir": r"E:\images",
             "choice.tag": "Return tag text only",
             "choice.arrary": "Return tag array",
             "choice.tagimg": "Export image with metadata",
+            "choice.original": "Keep original",
+            "choice.translate_zh": "Translate to Chinese",
             "choice.json": "Generate JSON result",
             "choice.mulitagimg": "Export tagged images",
             "choice.inline": "Inline result only",
@@ -822,6 +836,8 @@ class Predictor:
         general_mcut: bool,
         character_threshold: float,
         character_mcut: bool,
+        translation_mode: str,
+        translation_api_url: str,
     ) -> PredictionOptions:
         return PredictionOptions(
             model_dir=model_dir or self.local_model_dir,
@@ -829,6 +845,8 @@ class Predictor:
             character_threshold=character_threshold,
             general_mcut=general_mcut,
             character_mcut=character_mcut,
+            translation_mode=translation_mode,
+            translation_api_url=translation_api_url.strip(),
         )
 
     @staticmethod
@@ -890,6 +908,8 @@ class Predictor:
                     general_mcut=False,
                     character_threshold=DEFAULT_CHARACTER_THRESHOLD,
                     character_mcut=False,
+                    translation_mode=DEFAULT_TRANSLATION_MODE,
+                    translation_api_url=DEFAULT_TRANSLATION_API_URL,
                 ),
                 providers=DEFAULT_PROVIDERS,
             )
@@ -918,6 +938,8 @@ class Predictor:
         image: str | Image.Image | None,
         image_url: str,
         model_dir: str,
+        translation_mode: str,
+        translation_api_url: str,
         process_type: str,
         output_filename_template: str,
         general_threshold: float,
@@ -970,6 +992,8 @@ class Predictor:
                 general_mcut=general_mcut,
                 character_threshold=character_threshold,
                 character_mcut=character_mcut,
+                translation_mode=translation_mode,
+                translation_api_url=translation_api_url,
             ),
             providers=DEFAULT_PROVIDERS,
         )
@@ -993,6 +1017,8 @@ class Predictor:
         image_urls: str,
         input_dir: str,
         model_dir: str,
+        translation_mode: str,
+        translation_api_url: str,
         process_type: str,
         export_format: str,
         output_filename_template: str,
@@ -1031,6 +1057,8 @@ class Predictor:
                 general_mcut=general_mcut,
                 character_threshold=character_threshold,
                 character_mcut=character_mcut,
+                translation_mode=translation_mode,
+                translation_api_url=translation_api_url,
             ),
             providers=DEFAULT_PROVIDERS,
             process_type=process_type,
@@ -1118,6 +1146,20 @@ def build_ui() -> gr.Blocks:
     t = APP_I18N
 
     with gr.Blocks(title="Local WaifuDiffusion Tagger", elem_id="local-shell") as demo:
+        with gr.Accordion(t("accordion.translation"), open=False):
+            translation_mode = gr.Radio(
+                choices=[
+                    (t("choice.original"), "original"),
+                    (t("choice.translate_zh"), "zh"),
+                ],
+                value=DEFAULT_TRANSLATION_MODE,
+                label=t("label.translation_mode"),
+            )
+            translation_api_url = gr.Textbox(
+                value=DEFAULT_TRANSLATION_API_URL,
+                label=t("label.translation_api_url"),
+                placeholder=t("placeholder.translation_api_url"),
+            )
         with gr.Tabs() as main_tabs:
             with gr.Tab(t("tab.single")):
                 with gr.Row():
@@ -1238,6 +1280,8 @@ def build_ui() -> gr.Blocks:
                 image,
                 single_image_url,
                 single_model,
+                translation_mode,
+                translation_api_url,
                 process_type_single,
                 output_filename_template,
                 single_general_threshold,
@@ -1255,6 +1299,8 @@ def build_ui() -> gr.Blocks:
                 batch_image_urls,
                 batch_input_dir,
                 batch_model,
+                translation_mode,
+                translation_api_url,
                 process_type_batch,
                 export_format,
                 output_filename_template,

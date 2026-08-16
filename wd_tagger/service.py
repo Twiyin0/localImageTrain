@@ -32,6 +32,7 @@ from wd_tagger.config import (
     get_runtime_paths,
 )
 from wd_tagger.models import OnnxTagger, mcut_threshold
+from wd_tagger.translation import translate_texts, translation_api_is_healthy
 from wd_tagger.utils import ensure_dir
 
 IMAGE_DESCRIPTION_TAG = ExifTags.Base.ImageDescription
@@ -298,6 +299,10 @@ class PredictionOptions:
     character_threshold: float = DEFAULT_CHARACTER_THRESHOLD
     general_mcut: bool = False
     character_mcut: bool = False
+    lang: str | None = None
+    translation_mode: str = "original"
+    translation_api_url: str | None = None
+    translation_timeout_s: float = 8.0
 
 
 class TaggerService:
@@ -714,6 +719,38 @@ class TaggerService:
             "character_scores": [[name, float(score)] for name, score in characters],
         }
 
+    @staticmethod
+    def _normalize_translation_mode(mode: str | None) -> str:
+        normalized = (mode or "original").strip().lower()
+        if normalized in {"zh", "zh-cn", "cn", "chinese", "translate"}:
+            return "zh"
+        return "original"
+
+    @staticmethod
+    def _normalize_output_lang(lang: str | None) -> str | None:
+        normalized = (lang or "").strip().lower()
+        if normalized in {"zh", "zh-cn", "cn", "chinese"}:
+            return "zh"
+        if normalized in {"en", "en-us", "english"}:
+            return "en"
+        return None
+
+    def _resolve_output_lang(self, options: PredictionOptions) -> tuple[str, bool]:
+        explicit_lang = self._normalize_output_lang(options.lang)
+        if explicit_lang is not None:
+            return explicit_lang, explicit_lang == "zh"
+
+        legacy_mode = self._normalize_translation_mode(options.translation_mode)
+        if legacy_mode == "zh":
+            return "zh", True
+
+        if options.translation_api_url and translation_api_is_healthy(
+            options.translation_api_url,
+            timeout_s=options.translation_timeout_s,
+        ):
+            return "zh", True
+        return "en", False
+
     def _predict_raw_from_source(
         self,
         source: ImageSource,
@@ -807,8 +844,7 @@ class TaggerService:
             "similarity_score": None,
         }
 
-    @staticmethod
-    def _finalize_payload(raw: dict[str, Any], options: PredictionOptions, cache_info: dict[str, Any]) -> dict[str, Any]:
+    def _finalize_payload(self, raw: dict[str, Any], options: PredictionOptions, cache_info: dict[str, Any]) -> dict[str, Any]:
         general = [(str(name), float(score)) for name, score in raw.get("general_scores", [])]
         characters = [(str(name), float(score)) for name, score in raw.get("character_scores", [])]
         rating = {str(name): float(score) for name, score in dict(raw.get("rating", {})).items()}
@@ -835,6 +871,36 @@ class TaggerService:
             reverse=True,
         )
 
+        caption_original = ", ".join(name for name, _ in ordered_general)
+        translation_mode = self._normalize_translation_mode(options.translation_mode)
+        output_lang, translation_requested = self._resolve_output_lang(options)
+        display_general = ordered_general
+        display_characters = ordered_characters
+        translated = False
+        if output_lang == "zh":
+            general_names = [name for name, _ in ordered_general]
+            character_names = [name for name, _ in ordered_characters]
+            translated_names = translate_texts(
+                options.translation_api_url,
+                [*general_names, *character_names],
+                source_lang="en",
+                target_lang="zh",
+                timeout_s=options.translation_timeout_s,
+            )
+            if translated_names and len(translated_names) == len(general_names) + len(character_names):
+                translated = True
+                translated_general_names = translated_names[: len(general_names)]
+                translated_character_names = translated_names[len(general_names) :]
+                display_general = [
+                    (name, score)
+                    for name, (_, score) in zip(translated_general_names, ordered_general, strict=True)
+                ]
+                display_characters = [
+                    (name, score)
+                    for name, (_, score) in zip(translated_character_names, ordered_characters, strict=True)
+                ]
+        caption_display = ", ".join(name for name, _ in display_general)
+
         return {
             "repo_id": raw.get("repo_id", options.repo_id),
             "model_dir": raw.get("model_dir"),
@@ -846,7 +912,18 @@ class TaggerService:
             "rating": rating,
             "characters": dict(ordered_characters),
             "general": dict(ordered_general),
-            "caption": ", ".join(name for name, _ in ordered_general),
+            "characters_display": dict(display_characters),
+            "general_display": dict(display_general),
+            "caption": caption_display if translated else caption_original,
+            "caption_original": caption_original,
+            "caption_display": caption_display if translated else caption_original,
+            "translation": {
+                "lang": output_lang,
+                "mode": translation_mode,
+                "endpoint": options.translation_api_url if translation_requested else None,
+                "available": translated,
+                "requested": translation_requested,
+            },
             "cache": cache_info,
         }
 
@@ -904,6 +981,9 @@ class TaggerService:
 
     @staticmethod
     def extract_tag_array(payload: dict) -> list[str]:
+        display_general = payload.get("general_display")
+        if isinstance(display_general, dict) and display_general:
+            return list(display_general.keys())
         return list(payload.get("general", {}).keys())
 
     @staticmethod
@@ -916,7 +996,7 @@ class TaggerService:
                     "filename": item.get("filename"),
                     "ok": item.get("ok", True),
                     "caption": item.get("caption", ""),
-                    "tags": "|".join(item.get("general", {}).keys()) if item.get("ok", True) else "",
+                    "tags": "|".join(TaggerService.extract_tag_array(item)) if item.get("ok", True) else "",
                     "cache_hit": cache.get("cache_hit", ""),
                     "similarity_score": cache.get("similarity_score", ""),
                     "error": item.get("error", ""),

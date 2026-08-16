@@ -1,4 +1,28 @@
 services:
+  wd-tagger-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: wd-tagger-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env.nas
+        required: false
+    environment:
+      HF_HOME: /app/.cache/huggingface
+      WD_TAGGER_MODELS_DIR: /app/models
+      WD_TAGGER_PROVIDERS: CPUExecutionProvider
+      WD_TAGGER_REPO_ID: SmilingWolf/wd-convnext-tagger-v3
+      NO_PROXY: localhost,127.0.0.1,0.0.0.0
+      no_proxy: localhost,127.0.0.1,0.0.0.0
+    volumes:
+      - ./.cache:/app/.cache
+      - /opt/python/huggingface/localImageTrain/models:/app/models
+      - ./outputs:/app/outputs
+    command: ["python", "api.py", "--host", "0.0.0.0", "--port", "8000"]
+
   wd-tagger-webui:
     build:
       context: .

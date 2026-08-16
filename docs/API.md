@@ -1,6 +1,6 @@
 # WaifuDiffusion Tagger API
 
-Current API version: `1.3.2`
+Current API version: `1.3.3`
 
 Key capabilities:
 
@@ -51,6 +51,23 @@ Example response:
 }
 ```
 
+## 输出语言
+
+所有处理接口都支持可选参数 `lang`：
+
+- `lang=zh`：优先输出中文
+- `lang=en`：输出原文
+- 不传 `lang` 时，如果翻译 API 可用，默认输出 `zh`
+- 不传 `lang` 且翻译 API 不可用时，默认输出 `en`
+
+翻译服务不可用时，主流程不会失败，只会回退为原文输出。
+
+JSON 响应里会保留：
+
+- `caption_original`：原始标签串
+- `caption_display`：当前输出语言对应的展示标签串
+- `translation.lang`：请求/默认选择的输出语言
+
 ## Legacy Endpoints
 
 ### Single image JSON
@@ -66,6 +83,7 @@ Form fields:
 - `character_threshold`
 - `general_mcut`
 - `character_mcut`
+- `lang`
 
 ### Batch image JSON
 
@@ -80,6 +98,7 @@ Form fields:
 - `character_threshold`
 - `general_mcut`
 - `character_mcut`
+- `lang`
 
 ### Single image JSON from raw stream
 
@@ -89,6 +108,10 @@ Content-Type: image/jpeg
 ```
 
 This endpoint accepts the image as the raw request body, including chunked transfer from clients that support streaming uploads.
+
+Optional query parameters:
+
+- `lang`: optional output language, `zh` or `en`
 
 Example:
 
@@ -107,6 +130,10 @@ Content-Type: application/zip
 ```
 
 This endpoint accepts a zip archive as the raw request body. Supported image entries inside the zip: `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`.
+
+Optional query parameters:
+
+- `lang`: optional output language, `zh` or `en`
 
 Example:
 
@@ -135,6 +162,7 @@ Shared form fields:
 - `character_threshold`
 - `general_mcut`
 - `character_mcut`
+- `lang`
 - `output_filename_template`: output filename template. Default is `${origin_filename}_tagged${origin_ext}`
 
 Optional inputs:
@@ -162,6 +190,7 @@ Supported query parameters:
 - `type`: `tag`, `arrary`, `array`, `tagimg`, `json`, or `mulitagimg`
 - `filename`: optional original image filename or zip filename, used for type inference and output naming
 - `export_format`: only used by `type=json`, values are `inline`, `json`, `csv`, `both`
+- `lang`: optional output language, `zh` or `en`
 - `general_threshold`
 - `character_threshold`
 - `general_mcut`

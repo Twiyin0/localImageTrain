@@ -8,6 +8,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from io import BytesIO
 from time import perf_counter
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, Security, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -198,7 +199,7 @@ app = FastAPI(
         "Upload images or point to a directory and process them in multiple modes. "
         "Supports API key authentication and offline NAS deployment."
     ),
-    version="1.3.2",
+    version="1.3.3",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -238,6 +239,9 @@ def build_options(
     character_threshold: float,
     general_mcut: bool,
     character_mcut: bool,
+    lang: Literal["zh", "en"] | None = None,
+    translation_mode: str = "original",
+    translation_api_url: str | None = None,
 ) -> PredictionOptions:
     return PredictionOptions(
         repo_id=MODEL_REPO,
@@ -246,6 +250,9 @@ def build_options(
         character_threshold=character_threshold,
         general_mcut=general_mcut,
         character_mcut=character_mcut,
+        lang=lang,
+        translation_mode=translation_mode,
+        translation_api_url=translation_api_url,
     )
 
 
@@ -285,6 +292,9 @@ async def tag_image(
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
+    lang: Literal["zh", "en"] | None = Form(None),
+    translation_mode: str = Form("original"),
+    translation_api_url: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = perf_counter()
@@ -292,7 +302,15 @@ async def tag_image(
     process_started = perf_counter()
     payload = SERVICE.predict_from_source(
         source=source,
-        options=build_options(general_threshold, character_threshold, general_mcut, character_mcut),
+        options=build_options(
+            general_threshold,
+            character_threshold,
+            general_mcut,
+            character_mcut,
+            lang,
+            translation_mode,
+            translation_api_url,
+        ),
         providers=PROVIDERS,
     )
     process_ms = (perf_counter() - process_started) * 1000
@@ -310,6 +328,9 @@ async def tag_image_stream(
     character_threshold: float = Query(DEFAULT_CHARACTER_THRESHOLD),
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
+    lang: Literal["zh", "en"] | None = Query(None),
+    translation_mode: str = Query("original"),
+    translation_api_url: str | None = Query(None),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
@@ -318,7 +339,15 @@ async def tag_image_stream(
     process_started = perf_counter()
     payload = SERVICE.predict_from_source(
         source=source,
-        options=build_options(general_threshold, character_threshold, general_mcut, character_mcut),
+        options=build_options(
+            general_threshold,
+            character_threshold,
+            general_mcut,
+            character_mcut,
+            lang,
+            translation_mode,
+            translation_api_url,
+        ),
         providers=PROVIDERS,
     )
     process_ms = (perf_counter() - process_started) * 1000
@@ -335,6 +364,9 @@ async def tag_images_batch(
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
+    lang: Literal["zh", "en"] | None = Form(None),
+    translation_mode: str = Form("original"),
+    translation_api_url: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = perf_counter()
@@ -349,7 +381,15 @@ async def tag_images_batch(
     result = process_batch_type(
         service=SERVICE,
         sources=sources,
-        options=build_options(general_threshold, character_threshold, general_mcut, character_mcut),
+        options=build_options(
+            general_threshold,
+            character_threshold,
+            general_mcut,
+            character_mcut,
+            lang,
+            translation_mode,
+            translation_api_url,
+        ),
         providers=PROVIDERS,
         process_type="json",
         export_format="inline",
@@ -368,6 +408,9 @@ async def tag_images_batch_stream(
     character_threshold: float = Query(DEFAULT_CHARACTER_THRESHOLD),
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
+    lang: Literal["zh", "en"] | None = Query(None),
+    translation_mode: str = Query("original"),
+    translation_api_url: str | None = Query(None),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
@@ -377,7 +420,15 @@ async def tag_images_batch_stream(
     result = process_batch_type(
         service=SERVICE,
         sources=sources,
-        options=build_options(general_threshold, character_threshold, general_mcut, character_mcut),
+        options=build_options(
+            general_threshold,
+            character_threshold,
+            general_mcut,
+            character_mcut,
+            lang,
+            translation_mode,
+            translation_api_url,
+        ),
         providers=PROVIDERS,
         process_type="json",
         export_format="inline",
@@ -405,11 +456,22 @@ async def process_stream_endpoint(
     character_threshold: float = Query(DEFAULT_CHARACTER_THRESHOLD),
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
+    lang: Literal["zh", "en"] | None = Query(None),
+    translation_mode: str = Query("original"),
+    translation_api_url: str | None = Query(None),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> Response:
     request_started = perf_counter()
-    options = build_options(general_threshold, character_threshold, general_mcut, character_mcut)
+    options = build_options(
+        general_threshold,
+        character_threshold,
+        general_mcut,
+        character_mcut,
+        lang,
+        translation_mode,
+        translation_api_url,
+    )
 
     if type in SINGLE_TYPES:
         source = await read_stream_image(request, filename=filename, content_type=content_type)
@@ -465,10 +527,21 @@ async def process_endpoint(
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
+    lang: Literal["zh", "en"] | None = Form(None),
+    translation_mode: str = Form("original"),
+    translation_api_url: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> Response:
     request_started = perf_counter()
-    options = build_options(general_threshold, character_threshold, general_mcut, character_mcut)
+    options = build_options(
+        general_threshold,
+        character_threshold,
+        general_mcut,
+        character_mcut,
+        lang,
+        translation_mode,
+        translation_api_url,
+    )
 
     if type in SINGLE_TYPES:
         if image is not None:
