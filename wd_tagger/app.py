@@ -458,11 +458,16 @@ APP_CSS = """
 
 def build_settings_injection_js(scope: str) -> str:
     storage_key = f"wd_tagger_{scope}_output_filename_template"
+    translation_storage_key = f"wd_tagger_{scope}_translation_api_url"
     textbox_selector = f"#{scope}-output-filename-template textarea, #{scope}-output-filename-template input"
+    translation_selector = f"#{scope}-translation-api-url textarea, #{scope}-translation-api-url input"
     payload = {
         "storageKey": storage_key,
+        "translationStorageKey": translation_storage_key,
         "textboxSelector": textbox_selector,
+        "translationSelector": translation_selector,
         "defaultTemplate": DEFAULT_OUTPUT_FILENAME_TEMPLATE,
+        "defaultTranslationApiUrl": DEFAULT_TRANSLATION_API_URL,
         "presets": OUTPUT_TEMPLATE_PRESETS,
         "zh": {
             "title": "导出文件名规则",
@@ -472,6 +477,12 @@ def build_settings_injection_js(scope: str) -> str:
             "help": "可用变量：${origin_filename}, ${origin_basename}, ${origin_ext}, ${type}, ${index}, ${date}, ${time}, ${timestamp}",
             "save": "保存导出规则",
             "saved": "已保存",
+            "translationTitle": "翻译 API 设置",
+            "translationDescription": "这里会同步到翻译请求使用的 API 地址。留空时会自动回退为原文。",
+            "translationLabel": "翻译 API 地址",
+            "translationPlaceholder": "http://your-translator:8001",
+            "translationHelp": "建议填写翻译服务的 Base URL，保存后会同步到主界面设置。",
+            "translationSave": "保存翻译设置",
         },
         "en": {
             "title": "Export Filename Rule",
@@ -481,6 +492,12 @@ def build_settings_injection_js(scope: str) -> str:
             "help": "Variables: ${origin_filename}, ${origin_basename}, ${origin_ext}, ${type}, ${index}, ${date}, ${time}, ${timestamp}",
             "save": "Save Export Rule",
             "saved": "Saved",
+            "translationTitle": "Translation API Settings",
+            "translationDescription": "This value is used for translation requests. Leave it empty to keep the original text.",
+            "translationLabel": "Translation API URL",
+            "translationPlaceholder": "http://your-translator:8001",
+            "translationHelp": "Set the translation service base URL here; it will sync back to the main page input.",
+            "translationSave": "Save Translation Setting",
         },
     }
     config = json.dumps(payload, ensure_ascii=False)
@@ -512,8 +529,17 @@ def build_settings_injection_js(scope: str) -> str:
     setNativeValue(textbox, value || config.defaultTemplate);
   }}
 
+  function syncTranslationTextbox(value) {{
+    const textbox = document.querySelector(config.translationSelector);
+    setNativeValue(textbox, value || config.defaultTranslationApiUrl || "");
+  }}
+
   function getStoredTemplate() {{
     return localStorage.getItem(config.storageKey) || config.defaultTemplate;
+  }}
+
+  function getStoredTranslationUrl() {{
+    return localStorage.getItem(config.translationStorageKey) || config.defaultTranslationApiUrl || "";
   }}
 
   function findSettingsRoot() {{
@@ -525,8 +551,10 @@ def build_settings_injection_js(scope: str) -> str:
     const locale = currentLocale();
     const t = config[locale] || config.zh;
     const current = getStoredTemplate();
+    const currentTranslation = getStoredTranslationUrl();
     if (panel.dataset.rendered === "1" && panel.dataset.locale === locale) {{
       syncHiddenTextbox(current);
+      syncTranslationTextbox(currentTranslation);
       return;
     }}
     panel.dataset.rendered = "1";
@@ -543,11 +571,21 @@ def build_settings_injection_js(scope: str) -> str:
       <p>${{t.help}}</p>
       <button type="button" id="${{config.storageKey}}-save">${{t.save}}</button>
       <span class="wd-settings-status" id="${{config.storageKey}}-status"></span>
+      <h2 style="margin-top: 22px;">${{t.translationTitle}}</h2>
+      <p>${{t.translationDescription}}</p>
+      <label for="${{config.translationStorageKey}}-input">${{t.translationLabel}}</label>
+      <input id="${{config.translationStorageKey}}-input" value="${{currentTranslation.replaceAll('"', "&quot;")}}" placeholder="${{t.translationPlaceholder}}" />
+      <p>${{t.translationHelp}}</p>
+      <button type="button" id="${{config.translationStorageKey}}-save">${{t.translationSave}}</button>
+      <span class="wd-settings-status" id="${{config.translationStorageKey}}-status"></span>
     `;
     const preset = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-preset`);
     const input = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-input`);
     const save = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-save`);
     const status = panel.querySelector(`#${{CSS.escape(config.storageKey)}}-status`);
+    const translationInput = panel.querySelector(`#${{CSS.escape(config.translationStorageKey)}}-input`);
+    const translationSave = panel.querySelector(`#${{CSS.escape(config.translationStorageKey)}}-save`);
+    const translationStatus = panel.querySelector(`#${{CSS.escape(config.translationStorageKey)}}-status`);
     const matched = config.presets.find((item) => item.value === current);
     preset.value = matched ? matched.value : "";
     preset.addEventListener("change", () => {{
@@ -561,6 +599,14 @@ def build_settings_injection_js(scope: str) -> str:
       window.setTimeout(() => (status.textContent = ""), 1600);
     }});
     syncHiddenTextbox(current);
+    translationSave.addEventListener("click", () => {{
+      const value = translationInput.value.trim() || "";
+      localStorage.setItem(config.translationStorageKey, value);
+      syncTranslationTextbox(value);
+      translationStatus.textContent = t.saved;
+      window.setTimeout(() => (translationStatus.textContent = ""), 1600);
+    }});
+    syncTranslationTextbox(currentTranslation);
   }}
 
   function inject() {{
@@ -1064,6 +1110,7 @@ def build_ui() -> gr.Blocks:
                                 value=DEFAULT_TRANSLATION_API_URL,
                                 label=t("label.translation_api_url"),
                                 placeholder=t("placeholder.translation_api_url"),
+                                elem_id="remote-translation-api-url",
                             )
 
             with gr.Tab(t("tab.single")):
