@@ -180,6 +180,7 @@ async def read_stream_zip_sources(
 
 
 MODEL_REPO = os.getenv("WD_TAGGER_REPO_ID", DEFAULT_ONNX_REPO)
+DEFAULT_TRANSLATION_API_URL = os.getenv("WD_TAGGER_TRANSLATION_API_URL", "").strip() or None
 SERVICE = TaggerService()
 MODEL_DIR = os.getenv("WD_TAGGER_MODEL_DIR") or find_local_model_dir(
     repo_id=MODEL_REPO,
@@ -243,6 +244,7 @@ def build_options(
     translation_mode: str = "original",
     translation_api_url: str | None = None,
 ) -> PredictionOptions:
+    resolved_translation_api_url = (translation_api_url or "").strip() or DEFAULT_TRANSLATION_API_URL
     return PredictionOptions(
         repo_id=MODEL_REPO,
         model_dir=MODEL_DIR,
@@ -252,7 +254,7 @@ def build_options(
         character_mcut=character_mcut,
         lang=lang,
         translation_mode=translation_mode,
-        translation_api_url=translation_api_url,
+        translation_api_url=resolved_translation_api_url,
     )
 
 

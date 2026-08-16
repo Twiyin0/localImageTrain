@@ -695,10 +695,18 @@ def build_settings_injection_js(scope: str) -> str:
     renderPanel(panel);
   }}
 
-  syncHiddenTextbox(getStoredTemplate());
+  function syncStoredValues() {{
+    syncHiddenTextbox(getStoredTemplate());
+    syncTranslationTextbox(getStoredTranslationUrl());
+  }}
+
+  syncStoredValues();
   const observer = new MutationObserver(() => inject());
   observer.observe(document.body, {{ childList: true, subtree: true }});
-  window.setInterval(inject, 800);
+  window.setInterval(() => {{
+    syncStoredValues();
+    inject();
+  }}, 800);
 }})();
 """
 
