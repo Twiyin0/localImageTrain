@@ -181,7 +181,17 @@ class OnnxTagger:
                 cache_dir=self.cache_dir,
             )
         self.tag_metadata = load_tag_metadata(self.csv_path)
-        self.session = ort.InferenceSession(self.model_path, providers=providers)
+        session_options = ort.SessionOptions()
+        # Keep runtime memory bounded for long-lived desktop/server sessions.
+        # ONNX Runtime defaults these optimizations on; for this workload we prefer
+        # lower steady-state memory over a small amount of allocator reuse.
+        session_options.enable_cpu_mem_arena = os.getenv("WD_TAGGER_ORT_ENABLE_CPU_MEM_ARENA", "0") != "0"
+        session_options.enable_mem_pattern = os.getenv("WD_TAGGER_ORT_ENABLE_MEM_PATTERN", "0") != "0"
+        self.session = ort.InferenceSession(
+            self.model_path,
+            sess_options=session_options,
+            providers=providers,
+        )
         self.active_providers = self.session.get_providers()
         _, self.target_height, self.target_width, _ = self.session.get_inputs()[0].shape
         self.input_name = self.session.get_inputs()[0].name

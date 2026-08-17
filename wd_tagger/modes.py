@@ -52,7 +52,8 @@ def load_sources_from_dir(input_dir: str | Path) -> list[ImageSource]:
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
             continue
         source_bytes = path.read_bytes()
-        image = Image.open(path).convert("RGBA")
+        with Image.open(path) as image_file:
+            image = image_file.convert("RGBA")
         sources.append(
             ImageSource(
                 filename=path.name,

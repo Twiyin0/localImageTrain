@@ -282,9 +282,11 @@ class ImageSource:
         source_bytes: bytes,
         source_path: str | None = None,
     ) -> ImageSource:
+        with Image.open(BytesIO(source_bytes)) as image_file:
+            image = image_file.convert("RGBA")
         return cls(
             filename=filename,
-            image=Image.open(BytesIO(source_bytes)).convert("RGBA"),
+            image=image,
             content_type=content_type,
             source_path=source_path,
             source_bytes=source_bytes,
@@ -306,7 +308,8 @@ class PredictionOptions:
 class TaggerService:
     def __init__(self) -> None:
         self.runtime = get_runtime_paths()
-        self._tagger_cache: dict[tuple[str, str | None, tuple[str, ...]], OnnxTagger] = {}
+        self.tagger_cache_max_entries = max(1, int(os.getenv("WD_TAGGER_TAGGER_CACHE_MAX_ENTRIES", "2")))
+        self._tagger_cache: OrderedDict[tuple[str, str | None, tuple[str, ...]], OnnxTagger] = OrderedDict()
         self.export_root = ensure_dir(self.runtime.output_dir / "api_exports")
 
         self.exact_cache_enabled = os.getenv("WD_TAGGER_EXACT_CACHE_ENABLED", "1") != "0"
@@ -314,7 +317,8 @@ class TaggerService:
         self.similarity_threshold = float(os.getenv("WD_TAGGER_SIMILARITY_THRESHOLD", "0.985"))
         self.similar_candidate_limit = max(1, int(os.getenv("WD_TAGGER_SIMILAR_CANDIDATE_LIMIT", "128")))
         self.cache_max_entries = max(1, int(os.getenv("WD_TAGGER_CACHE_MAX_ENTRIES", "5000")))
-        self.memory_cache_size = max(1, int(os.getenv("WD_TAGGER_MEMORY_CACHE_SIZE", "512")))
+        # Store only cache row IDs in memory. Full prediction payloads live in SQLite.
+        self.memory_cache_size = max(0, int(os.getenv("WD_TAGGER_MEMORY_CACHE_SIZE", "512")))
 
         self.cache_db_path = self.runtime.cache_dir / SQLITE_CACHE_FILENAME
         self._db_lock = threading.Lock()
@@ -322,7 +326,7 @@ class TaggerService:
         self._db.row_factory = sqlite3.Row
         self._init_db()
 
-        self._exact_memory_cache: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+        self._exact_memory_cache: OrderedDict[tuple[str, str], int] = OrderedDict()
 
     def _init_db(self) -> None:
         with self._db_lock:
@@ -364,6 +368,7 @@ class TaggerService:
         key = (repo_id, resolved_model_dir, tuple(providers))
         cached = self._tagger_cache.get(key)
         if cached is not None:
+            self._tagger_cache.move_to_end(key)
             return cached
 
         tagger = OnnxTagger(
@@ -373,6 +378,9 @@ class TaggerService:
             local_model_dir=resolved_model_dir,
         )
         self._tagger_cache[key] = tagger
+        self._tagger_cache.move_to_end(key)
+        while len(self._tagger_cache) > self.tagger_cache_max_entries:
+            self._tagger_cache.popitem(last=False)
         return tagger
 
     @staticmethod
@@ -414,12 +422,30 @@ class TaggerService:
             "hits": int(row["hits"]),
         }
 
+    @staticmethod
+    def _row_to_candidate(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "model_key": str(row["model_key"]),
+            "source_md5": str(row["source_md5"]),
+            "pixel_md5": str(row["pixel_md5"]),
+            "signature": json.loads(str(row["signature_json"])),
+            "filename": row["filename"],
+            "source_path": row["source_path"],
+            "created_ts": float(row["created_ts"]),
+            "last_used_ts": float(row["last_used_ts"]),
+            "hits": int(row["hits"]),
+        }
+
     def _remember_exact_entry(self, entry: dict[str, Any]) -> None:
+        if self.memory_cache_size <= 0:
+            return
+        entry_id = int(entry["id"])
         for hash_value in {entry.get("source_md5"), entry.get("pixel_md5")}:
             if not hash_value:
                 continue
             key = self._cache_key(str(entry["model_key"]), str(hash_value))
-            self._exact_memory_cache[key] = entry
+            self._exact_memory_cache[key] = entry_id
             self._exact_memory_cache.move_to_end(key)
 
         while len(self._exact_memory_cache) > self.memory_cache_size:
@@ -427,10 +453,15 @@ class TaggerService:
 
     def _get_exact_from_memory(self, model_key: str, hashes: list[str]) -> dict[str, Any] | None:
         for hash_value in hashes:
-            entry = self._exact_memory_cache.get(self._cache_key(model_key, hash_value))
+            key = self._cache_key(model_key, hash_value)
+            entry_id = self._exact_memory_cache.get(key)
+            if entry_id is None:
+                continue
+            self._exact_memory_cache.move_to_end(key)
+            entry = self._fetch_entry_by_id(entry_id)
             if entry is not None:
-                self._exact_memory_cache.move_to_end(self._cache_key(model_key, hash_value))
                 return entry
+            self._exact_memory_cache.pop(key, None)
         return None
 
     def _fetch_exact_from_db(self, model_key: str, source_md5: str, pixel_md5: str) -> dict[str, Any] | None:
@@ -454,6 +485,23 @@ class TaggerService:
                     """,
                     (model_key, pixel_md5),
                 ).fetchone()
+
+        if row is None:
+            return None
+        entry = self._row_to_entry(row)
+        self._remember_exact_entry(entry)
+        return entry
+
+    def _fetch_entry_by_id(self, entry_id: int) -> dict[str, Any] | None:
+        with self._db_lock:
+            row = self._db.execute(
+                """
+                SELECT * FROM prediction_cache
+                WHERE id = ?
+                LIMIT 1
+                """,
+                (entry_id,),
+            ).fetchone()
 
         if row is None:
             return None
@@ -662,14 +710,15 @@ class TaggerService:
         with self._db_lock:
             rows = self._db.execute(
                 """
-                SELECT * FROM prediction_cache
+                SELECT id, model_key, source_md5, pixel_md5, signature_json, filename, source_path, created_ts, last_used_ts, hits
+                FROM prediction_cache
                 WHERE model_key = ?
                 ORDER BY last_used_ts DESC
                 LIMIT ?
                 """,
                 (model_key, self.similar_candidate_limit),
             ).fetchall()
-        return [self._row_to_entry(row) for row in rows]
+        return [self._row_to_candidate(row) for row in rows]
 
     def _find_similar_entry(
         self,
@@ -763,7 +812,6 @@ class TaggerService:
                 entry = self._fetch_exact_from_db(model_key, source_md5, pixel_md5)
             if entry is not None:
                 self._update_entry_usage(int(entry["id"]))
-                self._remember_exact_entry(entry)
                 return dict(entry["raw"]), {
                     "cache_hit": "exact",
                     "source_md5": source_md5,
@@ -780,24 +828,26 @@ class TaggerService:
                 {source_md5, pixel_md5},
             )
             if similar_entry is not None and similarity_components is not None:
-                self._update_entry_usage(int(similar_entry["id"]))
-                self._store_entry(
-                    model_key=model_key,
-                    source_md5=source_md5,
-                    pixel_md5=pixel_md5,
-                    signature=signature,
-                    raw=dict(similar_entry["raw"]),
-                    source=source,
-                )
-                return dict(similar_entry["raw"]), {
-                    "cache_hit": "similar",
-                    "source_md5": source_md5,
-                    "pixel_md5": pixel_md5,
-                    "matched_source_md5": similar_entry.get("source_md5"),
-                    "matched_pixel_md5": similar_entry.get("pixel_md5"),
-                    "similarity_score": similarity_components["combined"],
-                    "similarity_components": similarity_components,
-                }
+                full_similar_entry = self._fetch_entry_by_id(int(similar_entry["id"]))
+                if full_similar_entry is not None:
+                    self._update_entry_usage(int(full_similar_entry["id"]))
+                    self._store_entry(
+                        model_key=model_key,
+                        source_md5=source_md5,
+                        pixel_md5=pixel_md5,
+                        signature=signature,
+                        raw=dict(full_similar_entry["raw"]),
+                        source=source,
+                    )
+                    return dict(full_similar_entry["raw"]), {
+                        "cache_hit": "similar",
+                        "source_md5": source_md5,
+                        "pixel_md5": pixel_md5,
+                        "matched_source_md5": full_similar_entry.get("source_md5"),
+                        "matched_pixel_md5": full_similar_entry.get("pixel_md5"),
+                        "similarity_score": similarity_components["combined"],
+                        "similarity_components": similarity_components,
+                    }
 
         tagger = self._get_tagger(
             repo_id=options.repo_id,

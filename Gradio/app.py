@@ -958,13 +958,14 @@ class Predictor:
         if image is not None:
             if isinstance(image, str):
                 path = Path(image)
-                source = ImageSource(
-                    filename=path.name,
-                    image=Image.open(path).convert("RGBA"),
-                    content_type=f"image/{path.suffix.lower().lstrip('.') or 'png'}",
-                    source_path=str(path),
-                    source_bytes=path.read_bytes(),
-                )
+                with Image.open(path) as image_file:
+                    source = ImageSource(
+                        filename=path.name,
+                        image=image_file.convert("RGBA"),
+                        content_type=f"image/{path.suffix.lower().lstrip('.') or 'png'}",
+                        source_path=str(path),
+                        source_bytes=path.read_bytes(),
+                    )
             else:
                 buffer = BytesIO()
                 rgba = image.convert("RGBA")
@@ -1026,15 +1027,16 @@ class Predictor:
         sources: list[ImageSource] = []
         for file_path in files or []:
             path = Path(file_path)
-            sources.append(
-                ImageSource(
-                    filename=path.name,
-                    image=Image.open(path).convert("RGBA"),
-                    content_type=f"image/{path.suffix.lower().lstrip('.') or 'png'}",
-                    source_path=str(path),
-                    source_bytes=path.read_bytes(),
+            with Image.open(path) as image_file:
+                sources.append(
+                    ImageSource(
+                        filename=path.name,
+                        image=image_file.convert("RGBA"),
+                        content_type=f"image/{path.suffix.lower().lstrip('.') or 'png'}",
+                        source_path=str(path),
+                        source_bytes=path.read_bytes(),
+                    )
                 )
-            )
         if input_dir.strip():
             sources.extend(load_sources_from_dir(input_dir.strip()))
         if image_urls.strip():
@@ -1134,8 +1136,8 @@ class Predictor:
         )
 
 
-def build_ui() -> gr.Blocks:
-    predictor = Predictor()
+def build_ui(predictor: Predictor | None = None) -> gr.Blocks:
+    predictor = predictor or Predictor()
     local_models = discover_local_models()
     predictor.warmup_async()
     t = APP_I18N
@@ -1323,7 +1325,7 @@ def main() -> None:
     print(f"[local-mode] Python: {sys.executable}")
     print(f"[local-mode] Providers: {', '.join(DEFAULT_PROVIDERS)}")
     print(f"[local-mode] Model directory: {predictor.local_model_dir or 'auto-discover / auto-download'}")
-    app = build_ui()
+    app = build_ui(predictor)
     app.queue(max_size=8)
     app.launch(
         server_name=args.host,

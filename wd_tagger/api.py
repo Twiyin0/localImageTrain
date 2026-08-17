@@ -80,7 +80,8 @@ def normalize_image_content_type(content_type: str | None, filename: str | None 
 
 def decode_image(content: bytes) -> Image.Image:
     try:
-        return Image.open(BytesIO(content)).convert("RGBA")
+        with Image.open(BytesIO(content)) as image_file:
+            return image_file.convert("RGBA")
     except UnidentifiedImageError as exc:
         raise HTTPException(status_code=400, detail="Invalid image file") from exc
 
