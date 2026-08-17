@@ -19,6 +19,10 @@ DEFAULT_EXCLUDES = {
     ".pytest_cache",
     ".mypy_cache",
 }
+EXACT_FILE_EXCLUDES = {
+    ".env",
+    ".env.nas",
+}
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -40,6 +44,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def should_skip(path: Path) -> bool:
     parts = set(path.parts)
     if parts & DEFAULT_EXCLUDES:
+        return True
+    if path.name in EXACT_FILE_EXCLUDES:
+        return True
+    if path.name.startswith(".codex_"):
         return True
     if path.name.endswith(".pyc"):
         return True
