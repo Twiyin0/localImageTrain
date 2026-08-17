@@ -119,15 +119,10 @@ h3 {
   flex-wrap: wrap;
 }
 
-.status-grid,
 .workspace {
   display: grid;
   gap: 16px;
   margin-top: 16px;
-}
-
-.status-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .workspace {
@@ -161,7 +156,8 @@ h3 {
   top: 14px;
 }
 
-.tabs,
+.main-tabs,
+.result-tabs,
 .source-tabs,
 .toggles,
 .downloads {
@@ -170,8 +166,18 @@ h3 {
   flex-wrap: wrap;
 }
 
-.tabs {
+.main-tabs {
+  margin-top: 16px;
   margin-bottom: 16px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.result-tabs {
+  margin-top: 14px;
+  margin-bottom: 14px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -182,7 +188,8 @@ h3 {
   margin-bottom: 14px;
 }
 
-.tab,
+.main-tab,
+.result-tab,
 .source-tab,
 .btn {
   min-height: 44px;
@@ -195,12 +202,14 @@ h3 {
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
 }
 
-.tab,
+.main-tab,
+.result-tab,
 .source-tab {
   padding: 0 18px;
 }
 
-.tab.active,
+.main-tab.active,
+.result-tab.active,
 .source-tab.active {
   border-color: rgba(245, 109, 22, 0.42);
   background: rgba(245, 109, 22, 0.22);
@@ -216,7 +225,8 @@ h3 {
 }
 
 .btn:hover,
-.tab:hover,
+.main-tab:hover,
+.result-tab:hover,
 .source-tab:hover {
   transform: translateY(-1px);
 }
@@ -242,12 +252,14 @@ h3 {
   font-size: 18px;
 }
 
-.pane,
+.main-pane,
+.result-pane,
 .source-pane {
   display: none;
 }
 
-.pane.active,
+.main-pane.active,
+.result-pane.active,
 .source-pane.active {
   display: block;
 }
@@ -367,6 +379,50 @@ h3 {
   object-fit: contain;
 }
 
+code {
+  color: white;
+  font-weight: 800;
+}
+
+.block-note {
+  margin: 0 0 16px;
+  line-height: 1.65;
+}
+
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 14px 0;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.status-pill b {
+  color: white;
+}
+
+.status-ok {
+  border-color: rgba(49, 196, 141, 0.28);
+}
+
+.status-warn {
+  border-color: rgba(255, 180, 84, 0.28);
+}
+
 .muted {
   color: var(--muted);
 }
@@ -395,7 +451,9 @@ h3 {
   font-weight: 800;
 }
 
-.timing-grid {
+.timing-grid,
+.metric-grid,
+.flag-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
@@ -404,7 +462,8 @@ h3 {
 .metric-card,
 .summary-card,
 .item-card,
-.flag-card {
+.flag-card,
+.empty-card {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.03);
@@ -418,7 +477,8 @@ h3 {
 .metric-card h4,
 .summary-card h4,
 .item-card h4,
-.flag-card h4 {
+.flag-card h4,
+.empty-card h4 {
   margin: 0 0 8px;
   color: var(--muted);
   font-size: 12px;
@@ -435,6 +495,23 @@ h3 {
   font-size: 16px;
   font-weight: 800;
   line-height: 1.45;
+}
+
+.empty-card {
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty-card h4 {
+  color: white;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 16px;
+}
+
+.empty-card p {
+  margin: 0;
+  line-height: 1.55;
 }
 
 .flag-section .flag-card {
@@ -487,8 +564,7 @@ h3 {
 }
 
 @media (max-width: 1180px) {
-  .workspace,
-  .status-grid {
+  .workspace {
     grid-template-columns: 1fr;
   }
 

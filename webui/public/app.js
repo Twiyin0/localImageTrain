@@ -1,5 +1,5 @@
 (() => {
-  const SETTINGS_KEY = "wd_tagger_webui_settings_v1";
+  const SETTINGS_KEY = "wd_tagger_webui_settings_v2";
   const DEFAULT_OUTPUT_TEMPLATE = "${origin_filename}_tagged${origin_ext}";
   const OUTPUT_PRESETS = [
     { label: "默认：原文件名_tagged.原后缀", value: DEFAULT_OUTPUT_TEMPLATE },
@@ -26,8 +26,8 @@
   };
 
   const state = {
-    lastDownloads: [],
-    busy: false,
+    singleDownloads: [],
+    batchDownloads: [],
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -46,12 +46,15 @@
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }
 
-  function setSelectValue(selector, value) {
-    const element = $(selector);
-    if (element) element.value = value;
+  function syncPresetSelect(value) {
+    const select = $("#outputPreset");
+    select.innerHTML = OUTPUT_PRESETS.map((preset) => (
+      `<option value="${flags.escapeHtml(preset.value)}">${flags.escapeHtml(preset.label)}</option>`
+    )).join("");
+    select.value = OUTPUT_PRESETS.find((item) => item.value === value)?.value || "";
   }
 
-  function setInputValue(selector, value) {
+  function setValue(selector, value) {
     const element = $(selector);
     if (element) element.value = value;
   }
@@ -61,25 +64,17 @@
     if (element) element.checked = Boolean(value);
   }
 
-  function syncPresetSelect(value) {
-    const select = $("#outputPreset");
-    select.innerHTML = OUTPUT_PRESETS.map((preset) => (
-      `<option value="${flags.escapeHtml(preset.value)}">${flags.escapeHtml(preset.label)}</option>`
-    )).join("");
-    select.value = OUTPUT_PRESETS.find((item) => item.value === value)?.value || "";
-  }
-
   function applySettingsToForm(settings) {
-    setInputValue("#outputTemplate", settings.outputTemplate);
-    setSelectValue("#singleType", settings.singleType);
-    setSelectValue("#batchType", settings.batchType);
-    setSelectValue("#batchExportMode", settings.batchExportMode);
-    setSelectValue("#singleLang", settings.singleLang);
-    setSelectValue("#batchLang", settings.batchLang);
-    setInputValue("#singleGeneral", settings.singleGeneral);
-    setInputValue("#singleCharacter", settings.singleCharacter);
-    setInputValue("#batchGeneral", settings.batchGeneral);
-    setInputValue("#batchCharacter", settings.batchCharacter);
+    setValue("#outputTemplate", settings.outputTemplate);
+    setValue("#singleType", settings.singleType);
+    setValue("#batchType", settings.batchType);
+    setValue("#batchExportMode", settings.batchExportMode);
+    setValue("#singleLang", settings.singleLang);
+    setValue("#batchLang", settings.batchLang);
+    setValue("#singleGeneral", settings.singleGeneral);
+    setValue("#singleCharacter", settings.singleCharacter);
+    setValue("#batchGeneral", settings.batchGeneral);
+    setValue("#batchCharacter", settings.batchCharacter);
     setChecked("#singleGeneralMcut", settings.singleGeneralMcut);
     setChecked("#singleCharacterMcut", settings.singleCharacterMcut);
     setChecked("#batchGeneralMcut", settings.batchGeneralMcut);
@@ -115,43 +110,28 @@
   }
 
   function setBusy(value) {
-    state.busy = value;
     document.body.classList.toggle("busy", value);
-    $("#singleSubmit").disabled = value;
-    $("#batchSubmit").disabled = value;
-    $("#healthBtn").disabled = value;
+    ["#singleSubmit", "#batchSubmit"].forEach((selector) => {
+      const element = $(selector);
+      if (element) element.disabled = value;
+    });
+    $$(".js-health-btn").forEach((button) => {
+      button.disabled = value;
+    });
   }
 
   function renderBackendStatus(payload, error = null) {
-    const target = $("#backendStatus");
-    if (error) {
-      target.innerHTML = `<span style="color: var(--bad);">连接失败：${flags.escapeHtml(error)}</span>`;
-      return;
-    }
-    const providers = Array.isArray(payload.providers) ? payload.providers.join(", ") : String(payload.providers || "-");
-    target.innerHTML = [
-      `<div>状态：<strong style="color: var(--good);">${flags.escapeHtml(payload.status || "ok")}</strong></div>`,
-      `<div>模型：${flags.escapeHtml(payload.model_dir || "-")}</div>`,
-      `<div>Provider：${flags.escapeHtml(providers)}</div>`,
-      `<div>鉴权：${payload.auth_enabled ? "已开启" : "未开启"}</div>`,
-    ].join("");
-  }
-
-  function clearDownloads() {
-    for (const url of state.lastDownloads) URL.revokeObjectURL(url);
-    state.lastDownloads = [];
-    $("#downloadArea").innerHTML = "";
-  }
-
-  function addDownloadLink(label, blob, filename) {
-    const url = URL.createObjectURL(blob);
-    state.lastDownloads.push(url);
-    const link = document.createElement("a");
-    link.className = "download-link";
-    link.href = url;
-    link.download = filename;
-    link.textContent = `${label}: ${filename}`;
-    $("#downloadArea").appendChild(link);
+    const html = error
+      ? `<span style="color: var(--bad);">连接失败：${flags.escapeHtml(error)}</span>`
+      : [
+        `<div>状态：<strong style="color: var(--ok);">${flags.escapeHtml(payload.status || "ok")}</strong></div>`,
+        `<div>模型：${flags.escapeHtml(payload.model_dir || "-")}</div>`,
+        `<div>Provider：${flags.escapeHtml(Array.isArray(payload.providers) ? payload.providers.join(", ") : String(payload.providers || "-"))}</div>`,
+        `<div>鉴权：${payload.auth_enabled ? "已开启" : "未开启"}</div>`,
+      ].join("");
+    $$(".backend-status").forEach((target) => {
+      target.innerHTML = html;
+    });
   }
 
   function parseHeaders(response) {
@@ -167,7 +147,7 @@
     };
   }
 
-  function renderTiming(headers, extra = {}) {
+  function renderTiming(targetSelector, headers, extra = {}) {
     const metrics = [
       ["后端模型耗时", headers.processMs ? `${headers.processMs} ms` : "-"],
       ["后端总耗时", headers.totalMs ? `${headers.totalMs} ms` : "-"],
@@ -177,26 +157,55 @@
       ["内核态 CPU", headers.cpuSys ? `${headers.cpuSys} s` : "-"],
     ];
     if (extra.totalElapsedMs != null) metrics.unshift(["前端总耗时", `${extra.totalElapsedMs} ms`]);
-    $("#timingArea").innerHTML = metrics.map(([name, value]) => (
+    $(targetSelector).innerHTML = metrics.map(([name, value]) => (
       `<article class="metric-card"><h4>${flags.escapeHtml(name)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`
     )).join("");
   }
 
-  function renderFlagSummary(view) {
-    $("#flagArea").innerHTML = `
-      <div class="summary-card">
-        <h4>不合适标签</h4>
-        <strong>${flags.escapeHtml(view.flaggedTags.join(", ") || "无")}</strong>
+  function clearDownloads(scope) {
+    const key = scope === "single" ? "singleDownloads" : "batchDownloads";
+    for (const url of state[key]) URL.revokeObjectURL(url);
+    state[key] = [];
+    $(`#${scope}DownloadArea`).innerHTML = '<div class="empty-card"><h4>暂无导出文件</h4><p>处理完成后这里会显示下载入口。</p></div>';
+  }
+
+  function addDownloadLink(scope, label, blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const key = scope === "single" ? "singleDownloads" : "batchDownloads";
+    state[key].push(url);
+    const link = document.createElement("a");
+    link.className = "download-link";
+    link.href = url;
+    link.download = filename;
+    link.textContent = `${label}: ${filename}`;
+    $(`#${scope}DownloadArea`).appendChild(link);
+  }
+
+  function emptyCard(title, text) {
+    return `<div class="empty-card"><h4>${flags.escapeHtml(title)}</h4><p>${flags.escapeHtml(text)}</p></div>`;
+  }
+
+  function renderFlagSummary(targetSelector, payload) {
+    const view = flags.buildHighlightedTagsHtml(payload);
+    const ratings = Object.entries(view.flaggedRatings).map(([name, score]) => `${name}: ${score}`).join(", ");
+    if (!view.flaggedTags.length && !ratings) {
+      $(targetSelector).innerHTML = emptyCard("暂无风险提示", "没有命中明显的不合适标签。");
+      return view;
+    }
+    $(targetSelector).innerHTML = `
+      <div class="flag-grid">
+        ${view.flaggedTags.length ? `<article class="flag-card"><h4>不合适标签</h4><strong>${flags.escapeHtml(view.flaggedTags.join(", "))}</strong></article>` : ""}
+        ${ratings ? `<article class="flag-card"><h4>评分提示</h4><strong>${flags.escapeHtml(ratings)}</strong></article>` : ""}
       </div>
     `;
+    return view;
   }
 
   function renderSingleTags(payload) {
-    const view = flags.buildHighlightedTagsHtml(payload);
-    renderFlagSummary(view);
-    $("#resultArea").innerHTML = `
+    const view = renderFlagSummary("#singleFlagArea", payload);
+    $("#singleResultArea").innerHTML = `
       <div class="summary-card">
-        <h4>标签结果</h4>
+        <h4>标签输出</h4>
         <strong>${flags.escapeHtml(Array.isArray(payload) ? payload.join(", ") : String(payload || ""))}</strong>
         ${view.html}
       </div>
@@ -215,40 +224,15 @@
       ["近似命中", String(cacheStats.similar ?? 0)],
       ["未命中", String(cacheStats.miss ?? 0)],
     ];
-    const metricHtml = summaryCards.map(([title, value]) => (
-      `<article class="summary-card"><h4>${flags.escapeHtml(title)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`
-    )).join("");
-    const extraHtml = [
+    const metricCards = [
       ["模型累计耗时", metrics.inference_elapsed_ms != null ? `${metrics.inference_elapsed_ms} ms` : "-"],
       ["后端处理总耗时", metrics.total_elapsed_ms != null ? `${metrics.total_elapsed_ms} ms` : "-"],
       ["CPU 耗时", metrics.cpu_elapsed_ms != null ? `${metrics.cpu_elapsed_ms} ms` : "-"],
-    ].map(([title, value]) => (
-      `<article class="metric-card"><h4>${flags.escapeHtml(title)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`
-    )).join("");
-    const flaggedItems = items
-      .map((item) => {
-        const view = flags.buildHighlightedTagsHtml(item);
-        if (!view.flaggedTags.length && !Object.keys(view.flaggedRatings).length) return "";
-        const ratings = Object.entries(view.flaggedRatings).map(([k, v]) => `${k}: ${v}`).join(", ");
-        return `
-          <article class="flag-card">
-            <h4>${flags.escapeHtml(item.filename || "image")}</h4>
-            <strong>${flags.escapeHtml(view.flaggedTags.join(", ") || "无")}</strong>
-            <div class="muted" style="margin-top:6px;">评分：${flags.escapeHtml(ratings || "-")}</div>
-          </article>
-        `;
-      })
-      .filter(Boolean)
-      .join("");
-    $("#flagArea").innerHTML = flaggedItems || '<div class="summary-card"><h4>不合适标签</h4><strong>本次没有命中明显的不合适标签</strong></div>';
-    $("#resultArea").innerHTML = `
+    ];
+    $("#batchResultArea").innerHTML = `
       <div class="grid-stack">
-        <div class="grid-2">${metricHtml}</div>
-        <div class="grid-2">${extraHtml}</div>
-        <div class="summary-card">
-          <h4>批量明细</h4>
-          <strong>${flags.escapeHtml(`输入 ${items.length} 张，输出 ${payload.success_count ?? items.length} 张`)}</strong>
-        </div>
+        <div class="metric-grid">${summaryCards.map(([title, value]) => `<article class="summary-card"><h4>${flags.escapeHtml(title)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`).join("")}</div>
+        <div class="metric-grid">${metricCards.map(([title, value]) => `<article class="metric-card"><h4>${flags.escapeHtml(title)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`).join("")}</div>
         ${items.slice(0, 24).map((item) => {
           const cache = item.cache || {};
           const tagView = flags.buildHighlightedTagsHtml(item);
@@ -263,6 +247,17 @@
         }).join("")}
       </div>
     `;
+
+    const flaggedItems = items
+      .map((item) => {
+        const view = flags.buildHighlightedTagsHtml(item);
+        if (!view.flaggedTags.length && !Object.keys(view.flaggedRatings).length) return "";
+        const ratings = Object.entries(view.flaggedRatings).map(([k, v]) => `${k}: ${v}`).join(", ");
+        return `<article class="flag-card"><h4>${flags.escapeHtml(item.filename || "image")}</h4><strong>${flags.escapeHtml(view.flaggedTags.join(", ") || ratings || "命中")}</strong></article>`;
+      })
+      .filter(Boolean)
+      .join("");
+    $("#batchFlagArea").innerHTML = flaggedItems ? `<div class="flag-grid">${flaggedItems}</div>` : emptyCard("暂无风险摘要", "批量任务没有命中明显的不合适标签。");
   }
 
   function csvEscape(value) {
@@ -336,7 +331,10 @@
   async function submitSingle() {
     const settings = collectSettings();
     saveSettings(settings);
-    clearDownloads();
+    clearDownloads("single");
+    $("#singleResultArea").innerHTML = emptyCard("处理中", "正在上传并等待后端推理结果。");
+    $("#singleFlagArea").innerHTML = emptyCard("暂无风险提示", "执行后这里会显示不合适标签和评分。");
+    $("#singleTimingArea").innerHTML = "";
     setBusy(true);
     const start = performance.now();
     try {
@@ -367,13 +365,14 @@
       } else {
         const blob = await response.blob();
         const filename = extractFilename(headers.disposition, "tagged_image.bin");
+        $("#singleDownloadArea").innerHTML = "";
         addDownloadLink("下载图片", blob, filename);
-        $("#flagArea").innerHTML = '<div class="summary-card"><h4>不合适标签</h4><strong>tagimg 模式由后端导出图片文件</strong></div>';
-        $("#resultArea").innerHTML = `<div class="summary-card"><h4>文件已生成</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
+        $("#singleResultArea").innerHTML = `<div class="summary-card"><h4>文件已生成</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
+        $("#singleFlagArea").innerHTML = emptyCard("导出图像", "tagimg 模式由后端导出图片文件。");
       }
-      renderTiming(headers, { totalElapsedMs: Math.round(performance.now() - start) });
+      renderTiming("#singleTimingArea", headers, { totalElapsedMs: Math.round(performance.now() - start) });
     } catch (error) {
-      $("#resultArea").innerHTML = `<div class="summary-card"><h4>错误</h4><strong style="color: var(--bad);">${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
+      $("#singleResultArea").innerHTML = `<div class="flag-card"><h4>错误</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
     } finally {
       setBusy(false);
     }
@@ -382,7 +381,10 @@
   async function submitBatch() {
     const settings = collectSettings();
     saveSettings(settings);
-    clearDownloads();
+    clearDownloads("batch");
+    $("#batchResultArea").innerHTML = emptyCard("处理中", "正在上传批量任务并等待后端处理。");
+    $("#batchFlagArea").innerHTML = emptyCard("暂无风险摘要", "批量处理后这里会汇总命中风险标签的文件。");
+    $("#batchTimingArea").innerHTML = "";
     setBusy(true);
     const start = performance.now();
     try {
@@ -416,42 +418,50 @@
       if (settings.batchType === "json") {
         const payload = await response.json();
         renderBatchSummary(payload);
+        $("#batchDownloadArea").innerHTML = "";
         const jsonBlob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
         const csvBlob = new Blob([buildBatchCsv(payload)], { type: "text/csv;charset=utf-8" });
         if (settings.batchExportMode === "json" || settings.batchExportMode === "both") addDownloadLink("JSON", jsonBlob, "results.json");
         if (settings.batchExportMode === "csv" || settings.batchExportMode === "both") addDownloadLink("CSV", csvBlob, "results.csv");
+        if (settings.batchExportMode === "inline") clearDownloads("batch");
       } else {
         const blob = await response.blob();
         const filename = extractFilename(headers.disposition, "tagged_images.zip");
+        $("#batchDownloadArea").innerHTML = "";
         addDownloadLink("下载 ZIP", blob, filename);
-        $("#flagArea").innerHTML = '<div class="summary-card"><h4>不合适标签</h4><strong>ZIP 结果由后端直接返回</strong></div>';
-        $("#resultArea").innerHTML = `<div class="summary-card"><h4>批量导出</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
+        $("#batchResultArea").innerHTML = `<div class="summary-card"><h4>批量导出</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
+        $("#batchFlagArea").innerHTML = emptyCard("ZIP 结果", "ZIP 结果由后端直接返回。");
       }
-      renderTiming(headers, { totalElapsedMs: Math.round(performance.now() - start) });
+      renderTiming("#batchTimingArea", headers, { totalElapsedMs: Math.round(performance.now() - start) });
     } catch (error) {
-      $("#resultArea").innerHTML = `<div class="summary-card"><h4>错误</h4><strong style="color: var(--bad);">${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
+      $("#batchResultArea").innerHTML = `<div class="flag-card"><h4>错误</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
     } finally {
       setBusy(false);
     }
   }
 
+  function activateScopedTab(buttonSelector, paneSelector, button) {
+    const root = button.closest(".main-pane") || document;
+    $$(buttonSelector, root).forEach((item) => item.classList.remove("active"));
+    $$(paneSelector, root).forEach((pane) => pane.classList.remove("active"));
+    button.classList.add("active");
+    $(`#${button.dataset.target}`).classList.add("active");
+  }
+
   function bindTabs() {
-    $$(".tab").forEach((button) => {
+    $$(".main-tab").forEach((button) => {
       button.addEventListener("click", () => {
-        $$(".tab").forEach((item) => item.classList.remove("active"));
-        $$(".pane").forEach((pane) => pane.classList.remove("active"));
+        $$(".main-tab").forEach((item) => item.classList.remove("active"));
+        $$(".main-pane").forEach((pane) => pane.classList.remove("active"));
         button.classList.add("active");
         $(`#${button.dataset.target}`).classList.add("active");
       });
     });
     $$(".source-tab").forEach((button) => {
-      button.addEventListener("click", () => {
-        const group = button.closest(".pane");
-        $$(".source-tab", group).forEach((item) => item.classList.remove("active"));
-        $$(".source-pane", group).forEach((pane) => pane.classList.remove("active"));
-        button.classList.add("active");
-        $(`#${button.dataset.target}`, group).classList.add("active");
-      });
+      button.addEventListener("click", () => activateScopedTab(".source-tab", ".source-pane", button));
+    });
+    $$(".result-tab").forEach((button) => {
+      button.addEventListener("click", () => activateScopedTab(".result-tab", ".result-pane", button));
     });
   }
 
@@ -488,7 +498,7 @@
       if (file) {
         const reader = new FileReader();
         reader.onload = () => {
-          $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" style="max-width:100%;max-height:260px;border-radius:14px;display:block;" />`;
+          $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" />`;
         };
         reader.readAsDataURL(file);
       }
@@ -507,9 +517,15 @@
     applySettingsToForm(settings);
     bindTabs();
     bindSettings();
-    $("#healthBtn").addEventListener("click", checkBackend);
+    $$(".js-health-btn").forEach((button) => button.addEventListener("click", checkBackend));
     $("#singleSubmit").addEventListener("click", submitSingle);
     $("#batchSubmit").addEventListener("click", submitBatch);
+    clearDownloads("single");
+    clearDownloads("batch");
+    $("#singleFlagArea").innerHTML = emptyCard("暂无风险提示", "执行后这里会显示不合适标签和评分。");
+    $("#batchFlagArea").innerHTML = emptyCard("暂无风险摘要", "批量处理后这里会汇总命中风险标签的文件。");
+    $("#singleTimingArea").innerHTML = emptyCard("暂无耗时数据", "请求完成后这里会显示前端和后端耗时。");
+    $("#batchTimingArea").innerHTML = emptyCard("暂无耗时数据", "请求完成后这里会显示前端和后端耗时。");
     toggleBatchExportMode();
     checkBackend();
   }

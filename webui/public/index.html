@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>WD Tagger WebUI</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=gradio-layout-2" />
 </head>
 <body>
   <div class="shell">
@@ -15,42 +15,50 @@
         <p class="lead">前端只负责上传、展示和调用 API，推理继续由 Python API 负责。Docker WebUI 使用 Node 静态代理层，降低常驻内存占用。</p>
       </div>
       <div class="hero-actions">
-        <button id="healthBtn" class="btn btn-primary">检查后端</button>
+        <button class="btn btn-primary js-health-btn">检查后端</button>
         <a class="btn btn-ghost" href="/api/docs" target="_blank" rel="noreferrer">API 文档</a>
       </div>
     </header>
 
-    <section class="status-grid">
-      <article class="status-card" id="backendCard">
-        <h3>后端状态</h3>
-        <p id="backendStatus">未检查</p>
-      </article>
-      <article class="status-card">
-        <h3>处理模式</h3>
-        <p>单图、批量、URL、标签图、JSON / CSV / ZIP 导出。</p>
-      </article>
-      <article class="status-card">
-        <h3>内存目标</h3>
-        <p>WebUI 仅为 Node 静态代理层，不再常驻 Gradio Python 进程。</p>
-      </article>
+    <nav class="main-tabs">
+      <button class="main-tab" data-target="connectionPane">连接设置</button>
+      <button class="main-tab active" data-target="singlePane">单张处理</button>
+      <button class="main-tab" data-target="batchPane">批量处理</button>
+      <button class="main-tab" data-target="statusPane">运行状态</button>
+    </nav>
+
+    <section id="connectionPane" class="main-pane">
+      <div class="workspace">
+        <section class="panel">
+          <h2>连接设置</h2>
+          <p class="muted block-note">Docker WebUI 通过同源 <code>/api/*</code> 代理访问后端，API 地址和密钥由容器环境变量提供。</p>
+          <div class="status-strip">
+            <span class="status-pill">代理地址 <b>/api</b></span>
+            <span class="status-pill">后端 <b>wd-tagger-api:8000</b></span>
+            <span class="status-pill status-ok">鉴权 <b>自动转发</b></span>
+          </div>
+          <button class="btn btn-primary wide js-health-btn">检测远程连接</button>
+        </section>
+        <section class="panel">
+          <h2>连接详情</h2>
+          <div class="backend-status status-card">未检查</div>
+        </section>
+      </div>
     </section>
 
-    <main class="workspace">
-      <section class="panel">
-        <div class="tabs">
-          <button class="tab active" data-target="singlePane">单图</button>
-          <button class="tab" data-target="batchPane">批量</button>
-        </div>
+    <section id="singlePane" class="main-pane active">
+      <div class="workspace">
+        <section class="panel">
+          <button id="singleSubmit" class="btn btn-primary wide top-action">开始处理单张图像</button>
 
-        <div id="singlePane" class="pane active">
           <div class="source-tabs">
-            <button class="source-tab active" data-target="singleUpload">上传</button>
-            <button class="source-tab" data-target="singleUrl">URL</button>
+            <button class="source-tab active" data-target="singleUpload">上传图片</button>
+            <button class="source-tab" data-target="singleUrl">网络 URL</button>
           </div>
 
           <div id="singleUpload" class="source-pane active">
             <label class="field">
-              <span>图片文件</span>
+              <span>输入图像</span>
               <input id="singleFile" type="file" accept="image/*" />
             </label>
             <div id="singlePreview" class="preview muted">尚未选择图片</div>
@@ -58,7 +66,7 @@
 
           <div id="singleUrl" class="source-pane">
             <label class="field">
-              <span>图片 URL</span>
+              <span>图像 URL</span>
               <textarea id="singleUrlInput" rows="3" placeholder="https://example.com/image.png"></textarea>
             </label>
           </div>
@@ -67,34 +75,34 @@
             <label class="field">
               <span>返回类型</span>
               <select id="singleType">
-                <option value="tag">仅输出 tag</option>
-                <option value="arrary">输出 tag 数组</option>
-                <option value="tagimg">打 tag 并导出图片</option>
+                <option value="tag">仅返回标签文本</option>
+                <option value="arrary">返回标签数组</option>
+                <option value="tagimg">导出写回标签图像</option>
               </select>
             </label>
             <label class="field">
               <span>标签语言</span>
               <select id="singleLang">
-                <option value="zh">中文</option>
-                <option value="en">English</option>
+                <option value="zh">中文对照表</option>
+                <option value="en">原文</option>
               </select>
             </label>
           </div>
 
           <div class="grid-2">
             <label class="field">
-              <span>General 阈值</span>
+              <span>通用标签阈值</span>
               <input id="singleGeneral" type="number" min="0" max="1" step="0.05" />
             </label>
             <label class="field">
-              <span>Character 阈值</span>
+              <span>角色标签阈值</span>
               <input id="singleCharacter" type="number" min="0" max="1" step="0.05" />
             </label>
           </div>
 
           <div class="toggles">
-            <label><input id="singleGeneralMcut" type="checkbox" /> General MCut</label>
-            <label><input id="singleCharacterMcut" type="checkbox" /> Character MCut</label>
+            <label><input id="singleGeneralMcut" type="checkbox" /> 通用标签自动阈值 MCut</label>
+            <label><input id="singleCharacterMcut" type="checkbox" /> 角色标签自动阈值 MCut</label>
           </div>
 
           <div class="settings-box">
@@ -105,15 +113,39 @@
             <select id="outputPreset"></select>
             <input id="outputTemplate" type="text" />
           </div>
+        </section>
 
-          <button id="singleSubmit" class="btn btn-primary wide">开始单图处理</button>
-        </div>
+        <section class="panel results">
+          <h2>结果与详情</h2>
+          <div class="result-tabs">
+            <button class="result-tab active" data-target="singleTagsTab">标签结果</button>
+            <button class="result-tab" data-target="singleFlagsTab">风险提示</button>
+            <button class="result-tab" data-target="singleExportTab">导出文件</button>
+            <button class="result-tab" data-target="singleTimingTab">耗时指标</button>
+          </div>
+          <div id="singleTagsTab" class="result-pane active">
+            <div id="singleResultArea" class="result-body muted">等待处理结果</div>
+          </div>
+          <div id="singleFlagsTab" class="result-pane">
+            <div id="singleFlagArea" class="flag-section"></div>
+          </div>
+          <div id="singleExportTab" class="result-pane">
+            <div id="singleDownloadArea" class="downloads"></div>
+          </div>
+          <div id="singleTimingTab" class="result-pane">
+            <div id="singleTimingArea" class="timing-grid"></div>
+          </div>
+        </section>
+      </div>
+    </section>
 
-        <div id="batchPane" class="pane">
+    <section id="batchPane" class="main-pane">
+      <div class="workspace">
+        <section class="panel">
           <div class="source-tabs">
-            <button class="source-tab active" data-target="batchFiles">上传</button>
-            <button class="source-tab" data-target="batchUrls">URL</button>
-            <button class="source-tab" data-target="batchDir">目录</button>
+            <button class="source-tab active" data-target="batchFiles">上传图片</button>
+            <button class="source-tab" data-target="batchUrls">网络 URL</button>
+            <button class="source-tab" data-target="batchDir">远程目录</button>
           </div>
 
           <div id="batchFiles" class="source-pane active">
@@ -126,78 +158,108 @@
 
           <div id="batchUrls" class="source-pane">
             <label class="field">
-              <span>图片 URL，多个 URL 可用逗号、分号、竖线或换行分隔</span>
-              <textarea id="batchUrlInput" rows="4" placeholder="https://a.png;https://b.png"></textarea>
+              <span>批量图像 URL</span>
+              <textarea id="batchUrlInput" rows="5" placeholder="多个 URL 可用逗号、分号、竖线或换行分隔"></textarea>
             </label>
           </div>
 
           <div id="batchDir" class="source-pane">
             <label class="field">
-              <span>服务端目录路径</span>
+              <span>远程目录路径</span>
               <input id="batchDirInput" type="text" placeholder="/volume2/Project/images" />
             </label>
           </div>
 
           <div class="grid-2">
             <label class="field">
-              <span>批量类型</span>
+              <span>批量模式</span>
               <select id="batchType">
-                <option value="json">JSON 扫描</option>
-                <option value="mulitagimg">打 tag 并打包 ZIP</option>
+                <option value="json">生成 JSON 结果</option>
+                <option value="mulitagimg">导出写回标签图像</option>
               </select>
             </label>
-            <label class="field">
-              <span>标签语言</span>
-              <select id="batchLang">
-                <option value="zh">中文</option>
-                <option value="en">English</option>
+            <label id="batchExportModeRow" class="field">
+              <span>导出格式</span>
+              <select id="batchExportMode">
+                <option value="inline">仅内联结果</option>
+                <option value="json">仅 JSON 文件</option>
+                <option value="csv">仅 CSV 文件</option>
+                <option value="both">JSON + CSV</option>
               </select>
             </label>
           </div>
 
+          <label class="field">
+            <span>标签语言</span>
+            <select id="batchLang">
+              <option value="zh">中文对照表</option>
+              <option value="en">原文</option>
+            </select>
+          </label>
+
           <div class="grid-2">
             <label class="field">
-              <span>General 阈值</span>
+              <span>通用标签阈值</span>
               <input id="batchGeneral" type="number" min="0" max="1" step="0.05" />
             </label>
             <label class="field">
-              <span>Character 阈值</span>
+              <span>角色标签阈值</span>
               <input id="batchCharacter" type="number" min="0" max="1" step="0.05" />
             </label>
           </div>
 
           <div class="toggles">
-            <label><input id="batchGeneralMcut" type="checkbox" /> General MCut</label>
-            <label><input id="batchCharacterMcut" type="checkbox" /> Character MCut</label>
+            <label><input id="batchGeneralMcut" type="checkbox" /> 通用标签自动阈值 MCut</label>
+            <label><input id="batchCharacterMcut" type="checkbox" /> 角色标签自动阈值 MCut</label>
           </div>
 
-          <label id="batchExportModeRow" class="field">
-            <span>批量 JSON 导出</span>
-            <select id="batchExportMode">
-              <option value="inline">仅页面展示</option>
-              <option value="json">JSON 文件</option>
-              <option value="csv">CSV 文件</option>
-              <option value="both">JSON + CSV</option>
-            </select>
-          </label>
-
           <button id="batchSubmit" class="btn btn-primary wide">开始批量处理</button>
-        </div>
-      </section>
+        </section>
 
-      <section class="panel results">
-        <div class="result-head">
-          <h2>结果</h2>
-          <div id="downloadArea" class="downloads"></div>
-        </div>
-        <div id="timingArea" class="timing-grid"></div>
-        <div id="flagArea" class="flag-section"></div>
-        <div id="resultArea" class="result-body muted">等待处理结果</div>
-      </section>
-    </main>
+        <section class="panel results">
+          <h2>结果与详情</h2>
+          <div class="result-tabs">
+            <button class="result-tab active" data-target="batchSummaryTab">处理摘要</button>
+            <button class="result-tab" data-target="batchFlagsTab">风险摘要</button>
+            <button class="result-tab" data-target="batchExportTab">导出文件</button>
+            <button class="result-tab" data-target="batchTimingTab">耗时指标</button>
+          </div>
+          <div id="batchSummaryTab" class="result-pane active">
+            <div id="batchResultArea" class="result-body muted">等待批量结果</div>
+          </div>
+          <div id="batchFlagsTab" class="result-pane">
+            <div id="batchFlagArea" class="flag-section"></div>
+          </div>
+          <div id="batchExportTab" class="result-pane">
+            <div id="batchDownloadArea" class="downloads"></div>
+          </div>
+          <div id="batchTimingTab" class="result-pane">
+            <div id="batchTimingArea" class="timing-grid"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="statusPane" class="main-pane">
+      <div class="workspace">
+        <section class="panel">
+          <h2>运行状态</h2>
+          <div class="backend-status status-card">未检查</div>
+          <button class="btn btn-primary wide js-health-btn">刷新运行状态</button>
+        </section>
+        <section class="panel">
+          <h2>容器说明</h2>
+          <div class="status-strip">
+            <span class="status-pill">WebUI <b>Node 静态代理</b></span>
+            <span class="status-pill">API <b>Python 推理</b></span>
+            <span class="status-pill status-warn">NAS <b>CPUExecutionProvider</b></span>
+          </div>
+        </section>
+      </div>
+    </section>
   </div>
 
-  <script src="/flags.js"></script>
-  <script src="/app.js"></script>
+  <script src="/flags.js?v=gradio-layout-2"></script>
+  <script src="/app.js?v=gradio-layout-2"></script>
 </body>
 </html>
