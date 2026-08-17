@@ -48,6 +48,13 @@ fi
 
 echo ""
 echo "Environment ready: $VENV_ROOT"
+echo "Unified macOS/Linux launcher:"
+echo "  MODE=client sh scripts/run_app.sh"
+echo "  MODE=local sh scripts/run_app.sh"
+echo "  MODE=server sh scripts/run_app.sh"
+echo ""
 echo "macOS/Linux local:  scripts/run_in_macos_linux_by_localMode.sh"
 echo "macOS/Linux client: scripts/run_in_macos_linux_by_clientMode.sh"
 echo "macOS/Linux server: scripts/run_in_macos_linux_by_serverMode.sh"
+echo "NAS Docker WebUI: Node.js static frontend, Python API keeps inference"
+echo "NAS deploy: HOST_NAME=<ip> PASSWORD=<password> sh scripts/deploy_nas.sh"

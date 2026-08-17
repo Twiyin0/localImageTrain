@@ -22,13 +22,18 @@ DEFAULT_EXCLUDES = {
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Deploy WD Tagger API to a remote NAS over SSH")
+    parser = argparse.ArgumentParser(description="Deploy WD Tagger API and Node WebUI to a remote NAS over SSH")
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", type=int, default=22)
     parser.add_argument("--username", required=True)
     parser.add_argument("--password", required=True)
     parser.add_argument("--remote-dir", required=True)
     parser.add_argument("--local-dir", default=".")
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Skip uploading local files and only rebuild/restart containers in remote-dir.",
+    )
     return parser
 
 
@@ -108,13 +113,18 @@ def main() -> None:
     )
 
     try:
-        stream_tar_to_remote(ssh, local_root, args.remote_dir)
+        if args.no_upload:
+            print("skip upload: using files already present on remote host")
+        else:
+            stream_tar_to_remote(ssh, local_root, args.remote_dir)
 
         compose_cmd = choose_compose_command(ssh)
         remote_dir = args.remote_dir
         commands = [
             f"mkdir -p {remote_dir}",
-            f"cd {remote_dir} && {compose_cmd} -f compose.nas.yml up -d --build",
+            f"cd {remote_dir} && docker build -t localimagetrain-wd-tagger-api -f Dockerfile.api .",
+            f"cd {remote_dir} && docker build -t localimagetrain-wd-tagger-webui -f Dockerfile.webui .",
+            f"cd {remote_dir} && {compose_cmd} -f compose.nas.yml up -d --no-build",
             f"cd {remote_dir} && {compose_cmd} -f compose.nas.yml ps",
         ]
         for command in commands:

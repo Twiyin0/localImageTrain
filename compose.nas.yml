@@ -1,5 +1,6 @@
 services:
   wd-tagger-api:
+    image: localimagetrain-wd-tagger-api
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -19,9 +20,10 @@ services:
       - /opt/python/huggingface/localImageTrain/models:/app/models
 
   wd-tagger-webui:
+    image: localimagetrain-wd-tagger-webui
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile.webui
     container_name: wd-tagger-webui
     restart: unless-stopped
     ports:
@@ -29,14 +31,8 @@ services:
     env_file:
       - .env.nas
     environment:
-      HF_HOME: /app/.cache/huggingface
-      WD_TAGGER_MODELS_DIR: /app/models
-      WD_TAGGER_PROVIDERS: CPUExecutionProvider
-      WD_TAGGER_REPO_ID: SmilingWolf/wd-convnext-tagger-v3
-      NO_PROXY: localhost,127.0.0.1,0.0.0.0
-      no_proxy: localhost,127.0.0.1,0.0.0.0
-    volumes:
-      - ./.cache:/app/.cache
-      - /opt/python/huggingface/localImageTrain/models:/app/models
-      - ./outputs:/app/outputs
-    command: ["python", "Gradio/app.py", "--host", "0.0.0.0", "--port", "7861"]
+      PORT: 7861
+      WD_TAGGER_API_URL: http://wd-tagger-api:8000
+      WD_TAGGER_WEBUI_TIMEOUT_MS: 600000
+    depends_on:
+      - wd-tagger-api

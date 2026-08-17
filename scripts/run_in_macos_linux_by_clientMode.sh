@@ -8,6 +8,11 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-7860}"
 PYTHON_IN_VENV="$PROJECT_ROOT/$VENV_PATH/bin/python"
 
+LOCAL_NO_PROXY="localhost,127.0.0.1,0.0.0.0"
+NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY"
+no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY"
+export NO_PROXY no_proxy
+
 if [ ! -x "$PYTHON_IN_VENV" ]; then
   echo "Python executable not found: $PYTHON_IN_VENV. Run scripts/app_setup.sh first." >&2
   exit 1

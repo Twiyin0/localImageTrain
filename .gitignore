@@ -11,6 +11,8 @@ models/
 *.pyc
 *.pyo
 *.log
+.codex_askpass.*
+.codex_known_hosts
 .env
 .env.*
 !.env.nas.example

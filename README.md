@@ -61,6 +61,7 @@ Windows 上面的 `torch + cu121` 组合适用于常见 CUDA 12.x 驱动；macOS
 
 - 根目录 `app.py`：远程 NAS API 客户端前端，本机只负责上传和展示结果
 - `/Gradio/app.py`：保留的本地 Gradio 前端，继续使用本机模型推理
+- `wd-tagger-webui`：NAS / Docker 侧的 Node.js 静态前端，只负责调用 Python API
 - 前端已同步新版 UI：会显示耗时、远端资源占用、缓存命中、风险标签高亮，并在处理完成后自动展开结果区。
 - 图像输入支持本地上传和网络 URL；批量 URL 可用逗号、分号、竖线或换行分割。
 - 右下角 Gradio 原生 `settings` 可修改导出文件名模板，默认 `${origin_filename}_tagged${origin_ext}`，批量压缩包会使用 `.zip`。
@@ -420,7 +421,9 @@ curl.exe -X POST "http://127.0.0.1:8000/process" -H "X-API-Key: your-api-key" -F
 面向 `Debian / Intel N100 / 8GB RAM` 的 CPU 容器：
 
 ```bash
-docker compose -f compose.nas.yml up -d --build
+docker build -t localimagetrain-wd-tagger-api -f Dockerfile.api .
+docker build -t localimagetrain-wd-tagger-webui -f Dockerfile.webui .
+docker compose -f compose.nas.yml up -d --no-build
 ```
 
 默认端口：

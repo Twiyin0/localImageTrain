@@ -1,0 +1,14 @@
+FROM node:20-alpine
+
+ENV NODE_ENV=production
+ENV PORT=7861
+
+WORKDIR /app
+
+COPY webui /app/webui
+
+WORKDIR /app/webui
+
+EXPOSE 7861
+
+CMD ["node", "server.js"]
