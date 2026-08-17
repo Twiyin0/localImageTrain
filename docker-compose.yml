@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+      - "7861:8000"
     env_file:
       - path: .env.nas
         required: false
@@ -19,26 +20,8 @@ services:
       NO_PROXY: localhost,127.0.0.1,0.0.0.0
       no_proxy: localhost,127.0.0.1,0.0.0.0
     volumes:
+      - ./:/app
       - ./.cache:/app/.cache
-      - /opt/python/huggingface/localImageTrain/models:/app/models
+      - ./models:/app/models
       - ./outputs:/app/outputs
     command: ["python", "api.py", "--host", "0.0.0.0", "--port", "8000"]
-
-  wd-tagger-webui:
-    image: localimagetrain-wd-tagger-webui
-    build:
-      context: .
-      dockerfile: Dockerfile.webui
-    container_name: wd-tagger-webui
-    restart: unless-stopped
-    ports:
-      - "7861:7861"
-    env_file:
-      - path: .env.nas
-        required: false
-    environment:
-      PORT: 7861
-      WD_TAGGER_API_URL: http://wd-tagger-api:8000
-      WD_TAGGER_WEBUI_TIMEOUT_MS: 600000
-    depends_on:
-      - wd-tagger-api

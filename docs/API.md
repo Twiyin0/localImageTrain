@@ -1,6 +1,6 @@
 # WaifuDiffusion Tagger API
 
-Current API version: `1.3.3`
+Current API version: `1.0.0`
 
 Key capabilities:
 
@@ -43,6 +43,8 @@ Example response:
 ```json
 {
   "status": "ok",
+  "version": "1.0.0",
+  "frontend": "static-html",
   "python": "/usr/local/bin/python",
   "repo_id": "SmilingWolf/wd-convnext-tagger-v3",
   "model_dir": "/app/models/wd-convnext-tagger-v3",
@@ -331,6 +333,7 @@ Notes:
 
 - PNG output stores text metadata
 - JPEG/WebP tries to write EXIF comment fields
+- exported image metadata writes original English tags as the primary caption/tags; Chinese labels are kept only as display metadata
 
 ### `type=json`
 

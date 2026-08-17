@@ -19,4 +19,4 @@ if [ ! -x "$PYTHON_IN_VENV" ]; then
 fi
 
 cd "$PROJECT_ROOT"
-exec "$PYTHON_IN_VENV" Gradio/app.py --host "$HOST" --port "$PORT" "$@"
+exec "$PYTHON_IN_VENV" api.py --host "$HOST" --port "$PORT" "$@"

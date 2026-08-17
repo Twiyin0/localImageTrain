@@ -1,8 +1,7 @@
 param(
     [string]$VenvPath = ".venv",
     [string]$ListenHost = "",
-    [int]$Port = 0,
-    [switch]$Share
+    [int]$Port = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,14 +19,9 @@ if (-not (Test-Path -LiteralPath $python)) {
     throw "Python executable not found: $python. Run scripts\app_setup.ps1 first."
 }
 
-$argsList = @("Gradio\app.py", "--host", $resolvedHost, "--port", $resolvedPort)
-if ($Share) {
-    $argsList += "--share"
-}
-
 Push-Location $projectRoot
 try {
-    & $python @argsList
+    & $python api.py --host $resolvedHost --port $resolvedPort
 }
 finally {
     Pop-Location

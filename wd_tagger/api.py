@@ -11,8 +11,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, Security, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi import Cookie, FastAPI, File, Form, Header, HTTPException, Query, Request, Security, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from PIL import Image, UnidentifiedImageError
 import uvicorn
@@ -41,6 +41,26 @@ SINGLE_TYPES = {"tag", "arrary", "array", "tagimg"}
 BATCH_TYPES = {"json", "mulitagimg"}
 STREAM_CHUNK_SIZE = 1024 * 1024
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_local_env_file() -> None:
+    env_path = PROJECT_ROOT / ".env.nas"
+    if not env_path.is_file():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = value.strip().strip("'\"")
+
+
+load_local_env_file()
 
 
 def parse_provider_env() -> list[str]:
@@ -57,6 +77,7 @@ def get_expected_api_key() -> str:
 def require_api_key(
     x_api_key: str | None = Security(API_KEY_HEADER),
     bearer: HTTPAuthorizationCredentials | None = Security(BEARER_SCHEME),
+    api_key_cookie: str | None = Cookie(default=None, alias="wd_tagger_api_key"),
 ) -> str:
     expected = get_expected_api_key()
     if not expected:
@@ -65,6 +86,8 @@ def require_api_key(
     provided = x_api_key
     if not provided and bearer is not None:
         provided = bearer.credentials
+    if not provided:
+        provided = api_key_cookie
     if provided != expected:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return provided
@@ -189,6 +212,13 @@ MODEL_DIR = os.getenv("WD_TAGGER_MODEL_DIR") or find_local_model_dir(
     project_root=SERVICE.runtime.project_root,
 )
 PROVIDERS = parse_provider_env()
+WEBUI_DIR = SERVICE.runtime.project_root / "webui" / "public"
+WEBUI_INDEX = WEBUI_DIR / "index.html"
+WEBUI_ASSETS = {
+    "styles.css": WEBUI_DIR / "styles.css",
+    "app.js": WEBUI_DIR / "app.js",
+    "flags.js": WEBUI_DIR / "flags.js",
+}
 
 
 def list_local_models() -> list[dict[str, str | bool]]:
@@ -249,7 +279,7 @@ app = FastAPI(
         "Upload images or point to a directory and process them in multiple modes. "
         "Supports API key authentication and offline NAS deployment."
     ),
-    version="1.3.3",
+    version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -306,23 +336,44 @@ def build_options(
         translation_mode=translation_mode,
     )
 
+def serve_webui_file(path: Path, *, media_type: str) -> FileResponse:
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Static asset not found")
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-store"})
 
-@app.get("/", summary="API Info")
-def index() -> dict:
-    return {
-        "name": app.title,
-        "version": app.version,
-        "docs": "/docs",
-        "redoc": "/redoc",
-        "health": "/health",
-        "models": "/models",
-        "tag_endpoint": "/tag",
-        "tag_stream_endpoint": "/tag/stream",
-        "batch_tag_endpoint": "/tag/batch",
-        "batch_tag_stream_endpoint": "/tag/batch/stream",
-        "process_endpoint": "/process",
-        "process_stream_endpoint": "/process/stream",
-    }
+
+@app.get("/", summary="Web UI")
+def index() -> Response:
+    if not WEBUI_INDEX.is_file():
+        raise HTTPException(status_code=404, detail="Web UI is not available")
+    html = WEBUI_INDEX.read_text(encoding="utf-8")
+    response = HTMLResponse(html, headers={"Cache-Control": "no-store"})
+    api_key = get_expected_api_key()
+    if api_key:
+        response.set_cookie(
+            key="wd_tagger_api_key",
+            value=api_key,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            path="/",
+        )
+    return response
+
+
+@app.get("/styles.css", include_in_schema=False)
+def styles_css() -> Response:
+    return serve_webui_file(WEBUI_ASSETS["styles.css"], media_type="text/css; charset=utf-8")
+
+
+@app.get("/app.js", include_in_schema=False)
+def app_js() -> Response:
+    return serve_webui_file(WEBUI_ASSETS["app.js"], media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/flags.js", include_in_schema=False)
+def flags_js() -> Response:
+    return serve_webui_file(WEBUI_ASSETS["flags.js"], media_type="application/javascript; charset=utf-8")
 
 
 @app.get("/health", summary="Health Check")
@@ -330,6 +381,8 @@ def health() -> dict:
     models = list_local_models()
     return {
         "status": "ok",
+        "version": app.version,
+        "frontend": "static-html",
         "python": sys.executable,
         "repo_id": MODEL_REPO,
         "model_dir": MODEL_DIR,

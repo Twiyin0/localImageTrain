@@ -3,48 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WD Tagger WebUI</title>
-  <link rel="stylesheet" href="/styles.css?v=client-layout-4" />
+  <title>WD Tagger</title>
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">Remote API Client</p>
-        <h1>WD Tagger WebUI</h1>
-        <p class="lead">本机前端只负责上传、展示和调用 API；NAS / 远程 Python API 负责模型推理、缓存与导出。</p>
+        <h1>WD Tagger</h1>
+        <p class="lead">轻量静态前端，同源调用本地 API。</p>
       </div>
       <div class="hero-actions">
         <button class="btn btn-primary js-health-btn">检查后端</button>
-        <a class="btn btn-ghost" href="/api/docs" target="_blank" rel="noreferrer">API 文档</a>
+        <a class="btn btn-ghost" href="/docs" target="_blank" rel="noreferrer">API 文档</a>
       </div>
     </header>
 
     <nav class="main-tabs">
-      <button class="main-tab" data-target="connectionPane">连接设置</button>
       <button class="main-tab active" data-target="singlePane">单张处理</button>
       <button class="main-tab" data-target="batchPane">批量处理</button>
       <button class="main-tab" data-target="statusPane">运行状态</button>
     </nav>
-
-    <section id="connectionPane" class="main-pane">
-      <div class="workspace">
-        <section class="panel">
-          <h2>连接设置</h2>
-          <p class="muted block-note">WebUI 通过同源 <code>/api/*</code> 代理访问后端。API 地址和密钥由容器环境变量配置，浏览器不直接持有密钥。</p>
-          <div class="status-strip">
-            <span class="status-pill">代理地址 <b>/api</b></span>
-            <span class="status-pill">默认后端 <b>wd-tagger-api:8000</b></span>
-            <span class="status-pill status-ok">鉴权 <b>代理转发</b></span>
-          </div>
-          <button class="btn btn-primary wide js-health-btn">检测远程连接</button>
-        </section>
-        <section class="panel">
-          <h2>连接详情</h2>
-          <div class="backend-status status-card">未检查</div>
-        </section>
-      </div>
-    </section>
 
     <section id="singlePane" class="main-pane active">
       <div class="workspace">
@@ -62,7 +41,7 @@
               <div class="upload-icon">IMG</div>
               <div>
                 <strong>输入图像</strong>
-                <p>点击选择图片，或拖入后再选择文件。支持 PNG / JPG / WEBP 等常见格式。</p>
+                <p>点击选择图片，或直接把图片拖到这里。支持 PNG / JPG / WEBP 等常见格式。</p>
               </div>
               <button id="singleClear" class="btn btn-small btn-ghost" type="button">取消选择</button>
             </div>
@@ -93,14 +72,6 @@
             </label>
           </div>
 
-          <label class="field">
-            <span>标签语言</span>
-            <select id="singleLang">
-              <option value="zh">中文对照表</option>
-              <option value="en">原文</option>
-            </select>
-          </label>
-
           <div class="slider-grid">
             <label class="range-field">
               <span>通用标签阈值 <b id="singleGeneralValue">0.35</b></span>
@@ -116,20 +87,13 @@
             <label><input id="singleGeneralMcut" type="checkbox" /> 通用标签自动阈值 MCut</label>
             <label><input id="singleCharacterMcut" type="checkbox" /> 角色标签自动阈值 MCut</label>
           </div>
-
-          <div class="settings-box">
-            <div class="settings-head">
-              <h3>导出文件名规则</h3>
-              <span>默认：${origin_filename}_tagged${origin_ext}</span>
-            </div>
-            <select id="outputPreset"></select>
-            <input id="outputTemplate" type="text" />
-            <p class="muted tiny-note">支持 ${origin_filename}、${origin_ext}、${type}、${index}、${date}、${time}、${timestamp}；.xxx 会按实际导出类型替换。</p>
-          </div>
         </section>
 
-        <section class="panel results">
-          <h2>结果与详情</h2>
+        <details id="singleResults" class="panel result-panel">
+          <summary>
+            <strong>结果与详情</strong>
+            <span class="muted">标签 / 风险 / 导出 / 耗时</span>
+          </summary>
           <div class="result-tabs">
             <button class="result-tab active" data-target="singleTagsTab">标签结果</button>
             <button class="result-tab" data-target="singleFlagsTab">风险提示</button>
@@ -143,13 +107,13 @@
             <div id="singleFlagArea" class="flag-section"></div>
           </div>
           <div id="singleExportTab" class="result-pane">
-            <div class="export-hint">tagimg 模式会在这里生成带元数据的图片；tag / arrary 模式只展示标签结果。</div>
+            <div class="export-hint">处理完成后会在这里生成带元数据的图片；tag / arrary 模式会同时展示标签结果。</div>
             <div id="singleDownloadArea" class="downloads"></div>
           </div>
           <div id="singleTimingTab" class="result-pane">
             <div id="singleTimingArea" class="timing-grid"></div>
           </div>
-        </section>
+        </details>
       </div>
     </section>
 
@@ -168,7 +132,7 @@
               <div class="upload-icon">ZIP</div>
               <div>
                 <strong>多图文件</strong>
-                <p>点击选择多张图片。批量模式会逐张返回 JSON 摘要，并统计缓存命中。</p>
+                <p>点击选择多张图片，或直接拖入多张图片。批量模式会逐张返回 JSON 摘要。</p>
               </div>
               <button id="batchClear" class="btn btn-small btn-ghost" type="button">取消选择</button>
             </div>
@@ -189,14 +153,13 @@
             </label>
           </div>
 
-          <label class="field">
-            <span>本地模型</span>
-            <select id="batchModel">
-              <option value="">自动选择本地模型</option>
-            </select>
-          </label>
-
           <div class="grid-2">
+            <label class="field">
+              <span>本地模型</span>
+              <select id="batchModel">
+                <option value="">自动选择本地模型</option>
+              </select>
+            </label>
             <label class="field">
               <span>批量模式</span>
               <select id="batchType">
@@ -204,22 +167,15 @@
                 <option value="mulitagimg">导出写回标签图像 ZIP</option>
               </select>
             </label>
-            <label id="batchExportModeRow" class="field">
-              <span>导出格式</span>
-              <select id="batchExportMode">
-                <option value="inline">仅内联结果</option>
-                <option value="json">仅 JSON 文件</option>
-                <option value="csv">仅 CSV 文件</option>
-                <option value="both">JSON + CSV</option>
-              </select>
-            </label>
           </div>
 
-          <label class="field">
-            <span>标签语言</span>
-            <select id="batchLang">
-              <option value="zh">中文对照表</option>
-              <option value="en">原文</option>
+          <label id="batchExportModeRow" class="field">
+            <span>导出格式</span>
+            <select id="batchExportMode">
+              <option value="inline">仅内联结果</option>
+              <option value="json">仅 JSON 文件</option>
+              <option value="csv">仅 CSV 文件</option>
+              <option value="both">JSON + CSV</option>
             </select>
           </label>
 
@@ -242,8 +198,11 @@
           <button id="batchSubmit" class="btn btn-primary wide">开始批量处理</button>
         </section>
 
-        <section class="panel results">
-          <h2>结果与详情</h2>
+        <details id="batchResults" class="panel result-panel">
+          <summary>
+            <strong>结果与详情</strong>
+            <span class="muted">摘要 / 风险 / 导出 / 耗时</span>
+          </summary>
           <div class="result-tabs">
             <button class="result-tab active" data-target="batchSummaryTab">处理摘要</button>
             <button class="result-tab" data-target="batchFlagsTab">风险摘要</button>
@@ -263,7 +222,7 @@
           <div id="batchTimingTab" class="result-pane">
             <div id="batchTimingArea" class="timing-grid"></div>
           </div>
-        </section>
+        </details>
       </div>
     </section>
 
@@ -280,9 +239,36 @@
         </section>
       </div>
     </section>
+
+    <details class="panel settings-panel" open>
+      <summary>
+        <strong>设置</strong>
+        <span class="muted">标签语言 / 文件名模板 / 本地模型</span>
+      </summary>
+      <div class="settings-grid">
+        <label class="field">
+          <span>标签语言</span>
+          <select id="translationMode">
+            <option value="zh">中文对照表</option>
+            <option value="en">原文</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>文件名模板预设</span>
+          <select id="outputPreset"></select>
+        </label>
+        <label class="field settings-wide">
+          <span>自定义文件名模板</span>
+          <input id="outputTemplate" type="text" />
+        </label>
+        <p class="muted tiny-note settings-wide">支持 ${origin_filename}、${origin_ext}、${type}、${index}、${date}、${time}、${timestamp}；.xxx 会按实际导出类型替换。</p>
+      </div>
+    </details>
   </div>
 
-  <script src="/flags.js?v=client-layout-4"></script>
-  <script src="/app.js?v=client-layout-4"></script>
+  <button id="backToTop" class="back-to-top btn btn-primary" type="button">↑</button>
+
+  <script src="/flags.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

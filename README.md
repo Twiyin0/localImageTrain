@@ -1,4 +1,4 @@
-# 4GB 显存可用的 WaifuDiffusion Tagger 本地部署
+# 4GB 显存可用的 WaifuDiffusion Tagger 本地部署 v1.0
 
 这个项目把 [SmilingWolf/wd-tagger](https://huggingface.co/spaces/SmilingWolf/wd-tagger) 做成了一个更适合 `4GB` 显存机器的本地版：
 
@@ -46,10 +46,10 @@ Windows 上面的 `torch + cu121` 组合适用于常见 CUDA 12.x 驱动；macOS
 统一脚本都放在 `scripts/`：
 
 - `scripts/app_setup.ps1` / `scripts/app_setup.sh`：一键安装运行环境
-- `scripts/run_in_windows_by_localMode.ps1`：Windows 本机模型推理前端
+- `scripts/run_in_windows_by_localMode.ps1`：Windows 本机模型推理 API + 静态 WebUI
 - `scripts/run_in_windows_by_clientMode.ps1`：Windows 远程 API 客户端前端
 - `scripts/run_in_windows_by_serverMode.ps1`：Windows API 服务端
-- `scripts/run_in_macos_linux_by_localMode.sh`：macOS/Linux 本机模型推理前端
+- `scripts/run_in_macos_linux_by_localMode.sh`：macOS/Linux 本机模型推理 API + 静态 WebUI
 - `scripts/run_in_macos_linux_by_clientMode.sh`：macOS/Linux 远程 API 客户端前端
 - `scripts/run_in_macos_linux_by_serverMode.sh`：macOS/Linux API 服务端
 
@@ -57,14 +57,14 @@ Windows 上面的 `torch + cu121` 组合适用于常见 CUDA 12.x 驱动；macOS
 
 ## 2. 前端结构
 
-现在这个项目有两个前端：
+现在这个项目有三个入口：
 
 - 根目录 `app.py`：远程 NAS API 客户端前端，本机只负责上传和展示结果
-- `/Gradio/app.py`：保留的本地 Gradio 前端，继续使用本机模型推理
-- `wd-tagger-webui`：NAS / Docker 侧的 Node.js 静态前端，只负责调用 Python API
+- `wd_tagger/api.py`：本机模型推理 API，同时在根目录 `/` 直接返回静态前端页面
+- `Gradio/app.py`：旧版 Gradio 入口，保留作兼容参考，不再作为默认启动方式
 - 前端已同步新版 UI：会显示耗时、远端资源占用、缓存命中、风险标签高亮，并在处理完成后自动展开结果区。
 - 图像输入支持本地上传和网络 URL；批量 URL 可用逗号、分号、竖线或换行分割。
-- 右下角 Gradio 原生 `settings` 可修改导出文件名模板，默认 `${origin_filename}_tagged${origin_ext}`，批量压缩包会使用 `.zip`。
+- 右侧设置区可修改导出文件名模板，默认 `${origin_filename}_tagged${origin_ext}`，批量压缩包会使用 `.zip`。
 - 标签语言支持原文和中文。中文输出不再调用翻译 API，而是使用 `datasets/selected_tags_cn.csv` 的离线对照表；要改日常用词，直接改这个 CSV 的 `translatedname`。
 
 ## 3. 启动远程 NAS 客户端前端
@@ -122,22 +122,28 @@ HOST=127.0.0.1 PORT=8000 sh scripts/run_in_macos_linux_by_serverMode.sh
 
 Linux 服务器或 Docker 外部访问 WebUI 时，本地模式必须监听 `0.0.0.0`；脚本默认已经使用该地址。若只在当前机器浏览器访问，可显式设置 `HOST=127.0.0.1`。此外还需要在服务器防火墙或云安全组放行 TCP `7861`。
 
-## 4. 启动保留的本地 Gradio 前端
+## 4. 启动本机 API + 静态 WebUI
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_localMode.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run_in_windows_by_localMode.ps1 -ListenHost 127.0.0.1 -Port 7861
 ```
 
 macOS / Linux：
 
 ```bash
-sh scripts/run_in_macos_linux_by_localMode.sh
+HOST=127.0.0.1 PORT=7861 sh scripts/run_in_macos_linux_by_localMode.sh
 ```
 
-也可以直接运行：
+也可以直接运行 API：
 
 ```powershell
-.\.venv\Scripts\python.exe Gradio\app.py --host 127.0.0.1 --port 7861
+.\.venv\Scripts\python.exe api.py --host 127.0.0.1 --port 7861
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:7861
 ```
 
 如果你要继续用本机 GPU / 本地模型推理，再看下面这一节。
@@ -163,14 +169,14 @@ sh scripts/run_in_macos_linux_by_localMode.sh
 
 ```powershell
 $env:HF_ENDPOINT = "https://hf-mirror.com"
-python Gradio\app.py --host 127.0.0.1 --port 7861
+python api.py --host 127.0.0.1 --port 7861
 ```
 
 如果你已经手动下载好了 `model.onnx` 和 `selected_tags.csv`，也可以完全离线运行：
 
 ```powershell
 $env:WD_TAGGER_MODEL_DIR = "E:\models\wd-convnext-tagger-v3"
-python Gradio\app.py --host 127.0.0.1 --port 7861
+python api.py --host 127.0.0.1 --port 7861
 ```
 
 也可以直接放到项目的 `models` 目录，启动时会优先扫描本地模型；发现完整模型后不会再访问 Hugging Face：
@@ -313,8 +319,9 @@ outputs/finetune
 
 ## 9. 这个仓库里的文件
 
-- `app.py`: 远程 NAS API 客户端 Gradio 界面
-- `Gradio/app.py`: 保留的本地 Gradio 界面
+- `app.py`: 远程 NAS API 客户端前端
+- `api.py`: 本机模型推理 API 和静态 WebUI 入口
+- `Gradio/app.py`: 旧版 Gradio 入口，保留作兼容参考
 - `infer.py`: 命令行推理
 - `train.py`: 4GB 友好的微调脚本
 - `infer_finetuned.py`: 微调权重推理
@@ -322,7 +329,7 @@ outputs/finetune
 
 ## 10. 说明
 
-- 官方 Space 使用的是 `Gradio + ONNX Runtime + Hugging Face Hub`。
+- 官方 Space 使用的是 `Gradio + ONNX Runtime + Hugging Face Hub`；本仓库的默认入口已经切到 Python API + 静态 WebUI。
 - `wd-vit-tagger-v3` 模型卡给出了 `timm.create_model("hf_hub:SmilingWolf/wd-vit-tagger-v3", pretrained=True)` 的标准加载方式。
 - `wd-vit-large-tagger-v3` 和 `wd-eva02-large-tagger-v3` 体积明显更大，不适合 4GB 显存优先场景。
 
@@ -422,14 +429,19 @@ curl.exe -X POST "http://127.0.0.1:8000/process" -H "X-API-Key: your-api-key" -F
 
 ```bash
 docker build -t localimagetrain-wd-tagger-api -f Dockerfile.api .
-docker build -t localimagetrain-wd-tagger-webui -f Dockerfile.webui .
-docker compose -f compose.nas.yml up -d --no-build
+docker-compose -f compose.nas.yml up -d --no-build
+```
+
+日常同步源码或前端后无需重新构建镜像，直接重启容器即可：
+
+```bash
+docker-compose -f compose.nas.yml restart wd-tagger-api
 ```
 
 默认端口：
 
-- `8000` -> API
-- `7861` -> NAS WebUI
+- `8000` -> API + 静态 WebUI
+- `7861` -> 同一套静态 WebUI 兼容入口
 
 默认使用：
 
@@ -440,8 +452,8 @@ docker compose -f compose.nas.yml up -d --no-build
 
 自动部署脚本：
 
-- [deploy_nas.py](/e:/project/huggingface/deploy_nas.py)
-- [docs/NAS-DEPLOY.md](/e:/project/huggingface/docs/NAS-DEPLOY.md)
+- [wd_tagger/deploy_nas.py](./wd_tagger/deploy_nas.py)
+- [docs/NAS-DEPLOY.md](./docs/NAS-DEPLOY.md)
 
 离线模型准备脚本：
 

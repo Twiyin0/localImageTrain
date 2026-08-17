@@ -1,5 +1,5 @@
 (() => {
-  const SETTINGS_KEY = "wd_tagger_webui_settings_v2";
+  const SETTINGS_KEY = "wd_tagger_webui_settings_v3";
   const DEFAULT_OUTPUT_TEMPLATE = "${origin_filename}_tagged${origin_ext}";
   const OUTPUT_PRESETS = [
     { label: "默认：原文件名_tagged.原后缀", value: DEFAULT_OUTPUT_TEMPLATE },
@@ -10,11 +10,10 @@
 
   const DEFAULTS = {
     outputTemplate: DEFAULT_OUTPUT_TEMPLATE,
+    translationMode: "zh",
     singleType: "tag",
     batchType: "json",
     batchExportMode: "both",
-    singleLang: "zh",
-    batchLang: "zh",
     singleModel: "",
     batchModel: "",
     singleGeneral: 0.35,
@@ -25,12 +24,14 @@
     singleCharacterMcut: false,
     batchGeneralMcut: false,
     batchCharacterMcut: false,
+    singleSource: "singleUpload",
+    batchSource: "batchFiles",
   };
 
   const state = {
+    models: [],
     singleDownloads: [],
     batchDownloads: [],
-    models: [],
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -49,61 +50,67 @@
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   }
 
+  function applyValue(selector, value) {
+    const element = $(selector);
+    if (element) element.value = value;
+  }
+
+  function applyChecked(selector, value) {
+    const element = $(selector);
+    if (element) element.checked = Boolean(value);
+  }
+
   function syncPresetSelect(value) {
     const select = $("#outputPreset");
+    if (!select) return;
     select.innerHTML = OUTPUT_PRESETS.map((preset) => (
       `<option value="${flags.escapeHtml(preset.value)}">${flags.escapeHtml(preset.label)}</option>`
     )).join("");
     select.value = OUTPUT_PRESETS.find((item) => item.value === value)?.value || "";
   }
 
-  function setValue(selector, value) {
-    const element = $(selector);
-    if (element) element.value = value;
+  function syncRangeValue(input) {
+    const output = $(`#${input.id}Value`);
+    if (output) output.textContent = Number(input.value || 0).toFixed(2);
   }
 
-  function setChecked(selector, value) {
-    const element = $(selector);
-    if (element) element.checked = Boolean(value);
+  function syncRangeValues() {
+    ["#singleGeneral", "#singleCharacter", "#batchGeneral", "#batchCharacter"].forEach((selector) => {
+      const input = $(selector);
+      if (input) syncRangeValue(input);
+    });
   }
 
-  function applySettingsToForm(settings) {
-    setValue("#outputTemplate", settings.outputTemplate);
-    setValue("#singleType", settings.singleType);
-    setValue("#batchType", settings.batchType);
-    setValue("#batchExportMode", settings.batchExportMode);
-    setValue("#singleLang", settings.singleLang);
-    setValue("#batchLang", settings.batchLang);
-    setValue("#singleModel", settings.singleModel);
-    setValue("#batchModel", settings.batchModel);
-    setValue("#singleGeneral", settings.singleGeneral);
-    setValue("#singleCharacter", settings.singleCharacter);
-    setValue("#batchGeneral", settings.batchGeneral);
-    setValue("#batchCharacter", settings.batchCharacter);
-    setChecked("#singleGeneralMcut", settings.singleGeneralMcut);
-    setChecked("#singleCharacterMcut", settings.singleCharacterMcut);
-    setChecked("#batchGeneralMcut", settings.batchGeneralMcut);
-    setChecked("#batchCharacterMcut", settings.batchCharacterMcut);
+  function applySettings(settings) {
+    applyValue("#outputTemplate", settings.outputTemplate);
+    applyValue("#translationMode", settings.translationMode);
+    applyValue("#singleType", settings.singleType);
+    applyValue("#batchType", settings.batchType);
+    applyValue("#batchExportMode", settings.batchExportMode);
+    applyValue("#singleModel", settings.singleModel);
+    applyValue("#batchModel", settings.batchModel);
+    applyValue("#singleGeneral", settings.singleGeneral);
+    applyValue("#singleCharacter", settings.singleCharacter);
+    applyValue("#batchGeneral", settings.batchGeneral);
+    applyValue("#batchCharacter", settings.batchCharacter);
+    applyChecked("#singleGeneralMcut", settings.singleGeneralMcut);
+    applyChecked("#singleCharacterMcut", settings.singleCharacterMcut);
+    applyChecked("#batchGeneralMcut", settings.batchGeneralMcut);
+    applyChecked("#batchCharacterMcut", settings.batchCharacterMcut);
     syncPresetSelect(settings.outputTemplate);
     syncRangeValues();
     toggleBatchExportMode();
   }
 
-  function getActiveSource(prefix) {
-    const button = $(`#${prefix}Pane .source-tab.active`);
-    return button?.dataset.target || (prefix === "single" ? "singleUpload" : "batchFiles");
-  }
-
   function collectSettings() {
     return {
-      outputTemplate: $("#outputTemplate").value.trim() || DEFAULTS.outputTemplate,
+      outputTemplate: $("#outputTemplate").value.trim() || DEFAULT_OUTPUT_TEMPLATE,
+      translationMode: $("#translationMode").value || DEFAULTS.translationMode,
       singleType: $("#singleType").value,
       batchType: $("#batchType").value,
-      batchExportMode: $("#batchExportMode")?.value || DEFAULTS.batchExportMode,
-      singleLang: $("#singleLang").value,
-      batchLang: $("#batchLang").value,
-      singleModel: $("#singleModel")?.value || "",
-      batchModel: $("#batchModel")?.value || "",
+      batchExportMode: $("#batchExportMode").value || DEFAULTS.batchExportMode,
+      singleModel: $("#singleModel").value || "",
+      batchModel: $("#batchModel").value || "",
       singleGeneral: Number($("#singleGeneral").value || DEFAULTS.singleGeneral),
       singleCharacter: Number($("#singleCharacter").value || DEFAULTS.singleCharacter),
       batchGeneral: Number($("#batchGeneral").value || DEFAULTS.batchGeneral),
@@ -117,15 +124,22 @@
     };
   }
 
+  function getActiveSource(prefix) {
+    const active = $(`#${prefix}Pane .source-tab.active`);
+    return active?.dataset.target || (prefix === "single" ? "singleUpload" : "batchFiles");
+  }
+
   function setBusy(value) {
     document.body.classList.toggle("busy", value);
-    ["#singleSubmit", "#batchSubmit"].forEach((selector) => {
-      const element = $(selector);
-      if (element) element.disabled = value;
+    ["#singleSubmit", "#batchSubmit", ".js-health-btn"].forEach((selector) => {
+      $$(selector).forEach((button) => {
+        button.disabled = value;
+      });
     });
-    $$(".js-health-btn").forEach((button) => {
-      button.disabled = value;
-    });
+  }
+
+  function emptyCard(title, text) {
+    return `<div class="empty-card"><h4>${flags.escapeHtml(title)}</h4><p>${flags.escapeHtml(text)}</p></div>`;
   }
 
   function renderBackendStatus(payload, error = null) {
@@ -134,6 +148,7 @@
       ? `<span style="color: var(--bad);">连接失败：${flags.escapeHtml(error)}</span>`
       : [
         `<div>状态：<strong style="color: var(--ok);">${flags.escapeHtml(payload.status || "ok")}</strong></div>`,
+        `<div>前端：${flags.escapeHtml(payload.frontend || "static-html")}</div>`,
         `<div>模型：${flags.escapeHtml(payload.model_dir || "-")}</div>`,
         `<div>本地模型数：${flags.escapeHtml(modelCount ?? "-")}</div>`,
         `<div>Provider：${flags.escapeHtml(Array.isArray(payload.providers) ? payload.providers.join(", ") : String(payload.providers || "-"))}</div>`,
@@ -150,7 +165,7 @@
   function updateModelOptions(models, defaultModelDir = "") {
     state.models = Array.isArray(models) ? models : [];
     const saved = loadSettings();
-    const modelOptions = [
+    const options = [
       '<option value="">自动选择本地模型</option>',
       ...state.models.map((model) => {
         const label = `${model.name || model.model_dir}${model.default ? "（默认）" : ""}`;
@@ -160,8 +175,8 @@
     ["#singleModel", "#batchModel"].forEach((selector) => {
       const element = $(selector);
       if (!element) return;
-      const current = element.value || saved[selector.includes("single") ? "singleModel" : "batchModel"] || "";
-      element.innerHTML = modelOptions;
+      const current = element.value || saved[selector === "#singleModel" ? "singleModel" : "batchModel"] || "";
+      element.innerHTML = options;
       element.value = state.models.some((item) => item.model_dir === current) ? current : "";
     });
 
@@ -194,6 +209,7 @@
 
   function renderTiming(targetSelector, headers, extra = {}) {
     const metrics = [
+      ["前端总耗时", extra.totalElapsedMs != null ? `${extra.totalElapsedMs} ms` : "-"],
       ["后端模型耗时", headers.processMs ? `${headers.processMs} ms` : "-"],
       ["后端总耗时", headers.totalMs ? `${headers.totalMs} ms` : "-"],
       ["当前 RSS", headers.rss ? `${headers.rss} MB` : "-"],
@@ -201,7 +217,6 @@
       ["用户态 CPU", headers.cpuUser ? `${headers.cpuUser} s` : "-"],
       ["内核态 CPU", headers.cpuSys ? `${headers.cpuSys} s` : "-"],
     ];
-    if (extra.totalElapsedMs != null) metrics.unshift(["前端总耗时", `${extra.totalElapsedMs} ms`]);
     $(targetSelector).innerHTML = metrics.map(([name, value]) => (
       `<article class="metric-card"><h4>${flags.escapeHtml(name)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`
     )).join("");
@@ -226,8 +241,17 @@
     $(`#${scope}DownloadArea`).appendChild(link);
   }
 
-  function emptyCard(title, text) {
-    return `<div class="empty-card"><h4>${flags.escapeHtml(title)}</h4><p>${flags.escapeHtml(text)}</p></div>`;
+  function renderDownload(scope, label, blob, filename) {
+    $(`#${scope}DownloadArea`).innerHTML = "";
+    addDownloadLink(scope, label, blob, filename);
+  }
+
+  function resultTextFromPayload(payload) {
+    if (Array.isArray(payload)) return payload.join(", ");
+    if (payload && typeof payload === "object") {
+      return payload.caption_display || payload.caption || payload.caption_original || "";
+    }
+    return String(payload || "");
   }
 
   function renderFlagSummary(targetSelector, payload) {
@@ -246,12 +270,13 @@
     return view;
   }
 
-  function renderSingleTags(payload) {
+  function renderSingleResult(payload) {
     const view = renderFlagSummary("#singleFlagArea", payload);
+    const text = resultTextFromPayload(payload);
     $("#singleResultArea").innerHTML = `
       <div class="summary-card">
         <h4>标签输出</h4>
-        <strong>${flags.escapeHtml(Array.isArray(payload) ? payload.join(", ") : String(payload || ""))}</strong>
+        <strong>${flags.escapeHtml(text)}</strong>
         ${view.html}
       </div>
     `;
@@ -342,30 +367,9 @@
     if (select) select.disabled = !isJson;
   }
 
-  function syncRangeValue(input) {
-    const output = $(`#${input.id}Value`);
-    if (output) output.textContent = Number(input.value || 0).toFixed(2);
-  }
-
-  function syncRangeValues() {
-    ["#singleGeneral", "#singleCharacter", "#batchGeneral", "#batchCharacter"].forEach((selector) => {
-      const input = $(selector);
-      if (input) syncRangeValue(input);
-    });
-  }
-
-  function clearSingleFile() {
-    const input = $("#singleFile");
-    if (input) input.value = "";
-    $("#singlePreview").classList.add("muted");
-    $("#singlePreview").innerHTML = "尚未选择图片";
-  }
-
-  function clearBatchFiles() {
-    const input = $("#batchFilesInput");
-    if (input) input.value = "";
-    $("#batchFileList").classList.add("muted");
-    $("#batchFileList").innerHTML = "尚未选择文件";
+  function openResults(scope) {
+    const details = $(`#${scope}Results`);
+    if (details) details.open = true;
   }
 
   async function readError(response, contentType) {
@@ -379,7 +383,7 @@
   async function checkBackend() {
     setBusy(true);
     try {
-      const response = await fetch("/api/health");
+      const response = await fetch("/health", { credentials: "same-origin" });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       renderBackendStatus(await response.json());
     } catch (error) {
@@ -394,12 +398,46 @@
     form.append("character_threshold", String(settings[`${prefix}Character`]));
     form.append("general_mcut", String(settings[`${prefix}GeneralMcut`]));
     form.append("character_mcut", String(settings[`${prefix}CharacterMcut`]));
-    form.append("lang", settings[`${prefix}Lang`]);
-    form.append("translation_mode", settings[`${prefix}Lang`]);
+    form.append("lang", settings.translationMode || "zh");
+    form.append("translation_mode", settings.translationMode || "zh");
     form.append("output_filename_template", settings.outputTemplate);
     if (settings[`${prefix}Model`]) {
       form.append("model_dir", settings[`${prefix}Model`]);
     }
+  }
+
+  function appendSingleSource(form, settings) {
+    if (settings.singleSource === "singleUrl") {
+      const url = $("#singleUrlInput").value.trim();
+      if (!url) throw new Error("请先填写图片 URL");
+      form.append("image_url", url);
+      return;
+    }
+    const file = $("#singleFile").files[0];
+    if (!file) throw new Error("请先选择图片");
+    form.append("image", file, file.name);
+  }
+
+  async function requestSingleTaggedImage(settings) {
+    $("#singleDownloadArea").innerHTML = emptyCard("正在生成导出图片", "正在把标签写入图片元数据。");
+    const form = new FormData();
+    form.append("type", "tagimg");
+    appendCommonOptions(form, settings, "single");
+    appendSingleSource(form, settings);
+
+    const response = await fetch("/process", { method: "POST", body: form, credentials: "same-origin" });
+    const headers = parseHeaders(response);
+    const contentType = headers.contentType.toLowerCase();
+    if (!response.ok) throw new Error(await readError(response, contentType));
+    if (contentType.includes("application/json") || contentType.startsWith("text/")) {
+      throw new Error("后端没有返回带 tag 的图片文件。");
+    }
+
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("后端返回的图片文件为空。");
+    const filename = extractFilename(headers.disposition, "tagged_image.png");
+    renderDownload("single", "下载带 tag 图片", blob, filename);
+    return { headers, filename };
   }
 
   async function submitSingle() {
@@ -409,44 +447,45 @@
     $("#singleResultArea").innerHTML = emptyCard("处理中", "正在上传并等待后端推理结果。");
     $("#singleFlagArea").innerHTML = emptyCard("暂无风险提示", "执行后这里会显示不合适标签和评分。");
     $("#singleTimingArea").innerHTML = "";
+    openResults("single");
     setBusy(true);
     const start = performance.now();
     try {
       const form = new FormData();
       form.append("type", settings.singleType);
       appendCommonOptions(form, settings, "single");
+      appendSingleSource(form, settings);
 
-      if (settings.singleSource === "singleUrl") {
-        const url = $("#singleUrlInput").value.trim();
-        if (!url) throw new Error("请先填写图片 URL");
-        form.append("image_url", url);
-      } else {
-        const file = $("#singleFile").files[0];
-        if (!file) throw new Error("请先选择图片");
-        form.append("image", file, file.name);
-      }
-
-      const response = await fetch("/api/process", { method: "POST", body: form });
+      const response = await fetch("/process", { method: "POST", body: form, credentials: "same-origin" });
       const headers = parseHeaders(response);
       const contentType = headers.contentType.toLowerCase();
       if (!response.ok) throw new Error(await readError(response, contentType));
 
       if (contentType.includes("application/json")) {
         const payload = await response.json();
-        renderSingleTags(settings.singleType === "arrary" ? payload : payload.caption || payload);
+        renderSingleResult(payload);
       } else if (contentType.startsWith("text/plain")) {
-        renderSingleTags(await response.text());
+        const text = await response.text();
+        renderSingleResult(text);
       } else {
         const blob = await response.blob();
         const filename = extractFilename(headers.disposition, "tagged_image.bin");
-        $("#singleDownloadArea").innerHTML = "";
-        addDownloadLink("single", "下载图片", blob, filename);
+        renderDownload("single", "下载带 tag 图片", blob, filename);
         $("#singleResultArea").innerHTML = `<div class="summary-card"><h4>文件已生成</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
         $("#singleFlagArea").innerHTML = emptyCard("导出图像", "tagimg 模式由后端导出图片文件。");
       }
+      if (settings.singleType !== "tagimg") {
+        try {
+          await requestSingleTaggedImage(settings);
+        } catch (exportError) {
+          $("#singleDownloadArea").innerHTML = `<div class="flag-card"><h4>导出失败</h4><strong>${flags.escapeHtml(exportError instanceof Error ? exportError.message : String(exportError))}</strong></div>`;
+        }
+      }
       renderTiming("#singleTimingArea", headers, { totalElapsedMs: Math.round(performance.now() - start) });
+      openResults("single");
     } catch (error) {
       $("#singleResultArea").innerHTML = `<div class="flag-card"><h4>错误</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
+      openResults("single");
     } finally {
       setBusy(false);
     }
@@ -459,13 +498,14 @@
     $("#batchResultArea").innerHTML = emptyCard("处理中", "正在上传批量任务并等待后端处理。");
     $("#batchFlagArea").innerHTML = emptyCard("暂无风险摘要", "批量处理后这里会汇总命中风险标签的文件。");
     $("#batchTimingArea").innerHTML = "";
+    openResults("batch");
     setBusy(true);
     const start = performance.now();
     try {
       const form = new FormData();
       form.append("type", settings.batchType);
       appendCommonOptions(form, settings, "batch");
-      form.append("export_format", "inline");
+      form.append("export_format", settings.batchType === "json" ? settings.batchExportMode : "both");
 
       if (settings.batchSource === "batchFiles") {
         const files = Array.from($("#batchFilesInput").files || []);
@@ -484,12 +524,13 @@
         form.append("input_dir", dir);
       }
 
-      const response = await fetch("/api/process", { method: "POST", body: form });
+      const response = await fetch("/process", { method: "POST", body: form, credentials: "same-origin" });
       const headers = parseHeaders(response);
       const contentType = headers.contentType.toLowerCase();
       if (!response.ok) throw new Error(await readError(response, contentType));
 
-      if (settings.batchType === "json") {
+      const isDownload = Boolean(headers.disposition) || contentType.includes("application/zip") || contentType.includes("text/csv") || contentType.includes("octet-stream");
+      if (settings.batchType === "json" && !isDownload) {
         const payload = await response.json();
         renderBatchSummary(payload);
         $("#batchDownloadArea").innerHTML = "";
@@ -500,15 +541,16 @@
         if (settings.batchExportMode === "inline") clearDownloads("batch");
       } else {
         const blob = await response.blob();
-        const filename = extractFilename(headers.disposition, "tagged_images.zip");
-        $("#batchDownloadArea").innerHTML = "";
-        addDownloadLink("batch", "下载 ZIP", blob, filename);
+        const filename = extractFilename(headers.disposition, contentType.includes("text/csv") ? "results.csv" : contentType.includes("application/json") ? "results.json" : "tagged_images.zip");
+        renderDownload("batch", contentType.includes("text/csv") ? "下载 CSV" : contentType.includes("application/json") ? "下载 JSON" : "下载 ZIP", blob, filename);
         $("#batchResultArea").innerHTML = `<div class="summary-card"><h4>批量导出</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
-        $("#batchFlagArea").innerHTML = emptyCard("ZIP 结果", "ZIP 结果由后端直接返回。");
+        $("#batchFlagArea").innerHTML = emptyCard("导出结果", "文件结果由后端直接返回。");
       }
       renderTiming("#batchTimingArea", headers, { totalElapsedMs: Math.round(performance.now() - start) });
+      openResults("batch");
     } catch (error) {
       $("#batchResultArea").innerHTML = `<div class="flag-card"><h4>错误</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
+      openResults("batch");
     } finally {
       setBusy(false);
     }
@@ -539,6 +581,70 @@
     });
   }
 
+  function assignFiles(input, files) {
+    if (!input || !files.length) return;
+    const transfer = new DataTransfer();
+    files.forEach((file) => transfer.items.add(file));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function imageFilesFromDrop(event, multiple) {
+    const files = Array.from(event.dataTransfer?.files || []).filter((file) => file.type.startsWith("image/"));
+    return multiple ? files : files.slice(0, 1);
+  }
+
+  function updateSinglePreview() {
+    const file = $("#singleFile").files[0];
+    $("#singlePreview").textContent = file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "尚未选择图片";
+    if (file) {
+      $("#singlePreview").classList.remove("muted");
+      const reader = new FileReader();
+      reader.onload = () => {
+        $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" /><div class="preview-meta"><strong>${flags.escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span></div>`;
+      };
+      reader.readAsDataURL(file);
+    } else {
+      clearSingleFile();
+    }
+  }
+
+  function updateBatchFileList() {
+    const files = Array.from($("#batchFilesInput").files || []);
+    $("#batchFileList").classList.toggle("muted", !files.length);
+    $("#batchFileList").innerHTML = files.length
+      ? files.map((file) => `<div class="file-row"><span>${flags.escapeHtml(file.name)}</span><b>${Math.round(file.size / 1024)} KB</b></div>`).join("")
+      : "尚未选择文件";
+  }
+
+  function bindUploadCard(card) {
+    const input = $(`#${card.dataset.input}`);
+    if (!input) return;
+    const multiple = Boolean(input.multiple);
+
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      input.click();
+    });
+    ["dragenter", "dragover"].forEach((eventName) => {
+      card.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        card.classList.add("dragover");
+      });
+    });
+    card.addEventListener("dragleave", (event) => {
+      if (!card.contains(event.relatedTarget)) {
+        card.classList.remove("dragover");
+      }
+    });
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      card.classList.remove("dragover");
+      const files = imageFilesFromDrop(event, multiple);
+      if (files.length) assignFiles(input, files);
+    });
+  }
+
   function bindSettings() {
     $("#outputPreset").addEventListener("change", (event) => {
       if (event.target.value) {
@@ -548,11 +654,10 @@
     });
     [
       "#outputTemplate",
+      "#translationMode",
       "#singleType",
       "#batchType",
       "#batchExportMode",
-      "#singleLang",
-      "#batchLang",
       "#singleModel",
       "#batchModel",
       "#singleGeneral",
@@ -577,42 +682,32 @@
       });
     });
     $("#batchType").addEventListener("change", toggleBatchExportMode);
-    $$(".upload-card").forEach((card) => {
-      card.addEventListener("click", (event) => {
-        if (event.target.closest("button")) return;
-        const input = $(`#${card.dataset.input}`);
-        if (input) input.click();
-      });
-    });
+    $$(".upload-card").forEach(bindUploadCard);
     $("#singleClear").addEventListener("click", clearSingleFile);
     $("#batchClear").addEventListener("click", clearBatchFiles);
-    $("#singleFile").addEventListener("change", () => {
-      const file = $("#singleFile").files[0];
-      $("#singlePreview").textContent = file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "尚未选择图片";
-      if (file) {
-        $("#singlePreview").classList.remove("muted");
-        const reader = new FileReader();
-        reader.onload = () => {
-          $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" /><div class="preview-meta"><strong>${flags.escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span></div>`;
-        };
-        reader.readAsDataURL(file);
-      } else {
-        clearSingleFile();
-      }
-    });
-    $("#batchFilesInput").addEventListener("change", () => {
-      const files = Array.from($("#batchFilesInput").files || []);
-      $("#batchFileList").classList.toggle("muted", !files.length);
-      $("#batchFileList").innerHTML = files.length
-        ? files.map((file) => `<div class="file-row"><span>${flags.escapeHtml(file.name)}</span><b>${Math.round(file.size / 1024)} KB</b></div>`).join("")
-        : "尚未选择文件";
-    });
+    $("#singleFile").addEventListener("change", updateSinglePreview);
+    $("#batchFilesInput").addEventListener("change", updateBatchFileList);
+    $("#backToTop").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+  }
+
+  function clearSingleFile() {
+    const input = $("#singleFile");
+    if (input) input.value = "";
+    $("#singlePreview").classList.add("muted");
+    $("#singlePreview").innerHTML = "尚未选择图片";
+  }
+
+  function clearBatchFiles() {
+    const input = $("#batchFilesInput");
+    if (input) input.value = "";
+    $("#batchFileList").classList.add("muted");
+    $("#batchFileList").innerHTML = "尚未选择文件";
   }
 
   function init() {
     const settings = loadSettings();
     syncPresetSelect(settings.outputTemplate);
-    applySettingsToForm(settings);
+    applySettings(settings);
     bindTabs();
     bindSettings();
     $$(".js-health-btn").forEach((button) => button.addEventListener("click", checkBackend));

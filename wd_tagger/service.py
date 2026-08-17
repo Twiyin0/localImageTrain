@@ -37,10 +37,21 @@ from wd_tagger.utils import ensure_dir
 
 IMAGE_DESCRIPTION_TAG = ExifTags.Base.ImageDescription
 USER_COMMENT_TAG = 37510
+XP_TITLE_TAG = 40091
+XP_COMMENT_TAG = 40092
+XP_KEYWORDS_TAG = 40094
 SQLITE_CACHE_FILENAME = "prediction_cache.sqlite3"
 DEFAULT_OUTPUT_FILENAME_TEMPLATE = "${origin_filename}_tagged${origin_ext}"
 DEFAULT_BATCH_ARCHIVE_TEMPLATE = "${origin_filename}_tagged.zip"
 WINDOWS_FORBIDDEN_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _encode_xp_text(value: str) -> bytes:
+    return f"{value}\0".encode("utf-16le", errors="ignore")
+
+
+def _encode_user_comment(value: str) -> bytes:
+    return b"UNICODE\0" + value.encode("utf-16be", errors="ignore")
 
 
 def _bytes_to_mb(value: float) -> float:
@@ -1023,6 +1034,19 @@ class TaggerService:
         return list(payload.get("general", {}).keys())
 
     @staticmethod
+    def extract_original_tag_array(payload: dict) -> list[str]:
+        general = payload.get("general")
+        if isinstance(general, dict) and general:
+            return list(general.keys())
+        caption_original = payload.get("caption_original")
+        if isinstance(caption_original, str) and caption_original.strip():
+            return [tag.strip() for tag in caption_original.split(",") if tag.strip()]
+        caption = payload.get("caption")
+        if isinstance(caption, str) and caption.strip():
+            return [tag.strip() for tag in caption.split(",") if tag.strip()]
+        return []
+
+    @staticmethod
     def build_batch_rows(items: list[dict]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for item in items:
@@ -1091,12 +1115,17 @@ class TaggerService:
             safe_suffix = ".png"
             output_path = ensure_unique_path(output_path.with_suffix(".png"))
 
-        caption = payload["caption"]
-        tags = self.extract_tag_array(payload)
+        tags = self.extract_original_tag_array(payload)
+        display_tags = self.extract_tag_array(payload)
+        caption = ", ".join(tags) or str(payload.get("caption_original") or payload.get("caption") or "")
+        caption_display = str(payload.get("caption_display") or payload.get("caption") or caption)
         metadata_text = json.dumps(
             {
                 "caption": caption,
+                "caption_original": caption,
+                "caption_display": caption_display,
                 "tags": tags,
+                "tags_display": display_tags,
                 "rating": payload.get("rating", {}),
                 "characters": payload.get("characters", {}),
                 "cache": payload.get("cache", {}),
@@ -1109,6 +1138,10 @@ class TaggerService:
             png_info = PngImagePlugin.PngInfo()
             png_info.add_text("Caption", caption)
             png_info.add_text("Tags", ", ".join(tags))
+            png_info.add_text("Description", caption)
+            png_info.add_text("Comment", caption)
+            png_info.add_text("parameters", caption)
+            png_info.add_text("CaptionDisplay", caption_display)
             png_info.add_text("WDTagger", metadata_text)
             image.save(output_path, pnginfo=png_info)
             return output_path
@@ -1116,8 +1149,11 @@ class TaggerService:
         save_image = image.convert("RGB") if safe_suffix in {".jpg", ".jpeg"} else image
         exif = save_image.getexif()
         exif[IMAGE_DESCRIPTION_TAG] = caption
+        exif[XP_TITLE_TAG] = _encode_xp_text(Path(output_path).stem)
+        exif[XP_COMMENT_TAG] = _encode_xp_text(caption)
+        exif[XP_KEYWORDS_TAG] = _encode_xp_text(";".join(tags))
         try:
-            exif[USER_COMMENT_TAG] = metadata_text
+            exif[USER_COMMENT_TAG] = _encode_user_comment(metadata_text)
         except Exception:
             pass
         try:
@@ -1128,6 +1164,10 @@ class TaggerService:
             png_info = PngImagePlugin.PngInfo()
             png_info.add_text("Caption", caption)
             png_info.add_text("Tags", ", ".join(tags))
+            png_info.add_text("Description", caption)
+            png_info.add_text("Comment", caption)
+            png_info.add_text("parameters", caption)
+            png_info.add_text("CaptionDisplay", caption_display)
             png_info.add_text("WDTagger", metadata_text)
             image.save(fallback, pnginfo=png_info)
             return fallback

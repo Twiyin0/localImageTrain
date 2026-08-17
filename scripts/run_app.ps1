@@ -3,8 +3,7 @@ param(
     [string]$Mode = "client",
     [string]$VenvPath = ".venv",
     [string]$ListenHost = "",
-    [int]$Port = 0,
-    [switch]$Share
+    [int]$Port = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,7 +11,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 switch ($Mode) {
     "local" {
-        & (Join-Path $projectRoot "scripts\run_in_windows_by_localMode.ps1") -VenvPath $VenvPath -ListenHost $ListenHost -Port $Port -Share:$Share
+        & (Join-Path $projectRoot "scripts\run_in_windows_by_localMode.ps1") -VenvPath $VenvPath -ListenHost $ListenHost -Port $Port
     }
     "client" {
         & (Join-Path $projectRoot "scripts\run_in_windows_by_clientMode.ps1") -VenvPath $VenvPath -ListenHost $ListenHost -Port $Port
