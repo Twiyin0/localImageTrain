@@ -15,6 +15,8 @@
     batchExportMode: "both",
     singleLang: "zh",
     batchLang: "zh",
+    singleModel: "",
+    batchModel: "",
     singleGeneral: 0.35,
     singleCharacter: 0.85,
     batchGeneral: 0.35,
@@ -28,6 +30,7 @@
   const state = {
     singleDownloads: [],
     batchDownloads: [],
+    models: [],
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -71,6 +74,8 @@
     setValue("#batchExportMode", settings.batchExportMode);
     setValue("#singleLang", settings.singleLang);
     setValue("#batchLang", settings.batchLang);
+    setValue("#singleModel", settings.singleModel);
+    setValue("#batchModel", settings.batchModel);
     setValue("#singleGeneral", settings.singleGeneral);
     setValue("#singleCharacter", settings.singleCharacter);
     setValue("#batchGeneral", settings.batchGeneral);
@@ -80,6 +85,7 @@
     setChecked("#batchGeneralMcut", settings.batchGeneralMcut);
     setChecked("#batchCharacterMcut", settings.batchCharacterMcut);
     syncPresetSelect(settings.outputTemplate);
+    syncRangeValues();
     toggleBatchExportMode();
   }
 
@@ -96,6 +102,8 @@
       batchExportMode: $("#batchExportMode")?.value || DEFAULTS.batchExportMode,
       singleLang: $("#singleLang").value,
       batchLang: $("#batchLang").value,
+      singleModel: $("#singleModel")?.value || "",
+      batchModel: $("#batchModel")?.value || "",
       singleGeneral: Number($("#singleGeneral").value || DEFAULTS.singleGeneral),
       singleCharacter: Number($("#singleCharacter").value || DEFAULTS.singleCharacter),
       batchGeneral: Number($("#batchGeneral").value || DEFAULTS.batchGeneral),
@@ -121,17 +129,54 @@
   }
 
   function renderBackendStatus(payload, error = null) {
+    const modelCount = Array.isArray(payload?.models) ? payload.models.length : payload?.model_count;
     const html = error
       ? `<span style="color: var(--bad);">连接失败：${flags.escapeHtml(error)}</span>`
       : [
         `<div>状态：<strong style="color: var(--ok);">${flags.escapeHtml(payload.status || "ok")}</strong></div>`,
         `<div>模型：${flags.escapeHtml(payload.model_dir || "-")}</div>`,
+        `<div>本地模型数：${flags.escapeHtml(modelCount ?? "-")}</div>`,
         `<div>Provider：${flags.escapeHtml(Array.isArray(payload.providers) ? payload.providers.join(", ") : String(payload.providers || "-"))}</div>`,
         `<div>鉴权：${payload.auth_enabled ? "已开启" : "未开启"}</div>`,
       ].join("");
     $$(".backend-status").forEach((target) => {
       target.innerHTML = html;
     });
+    if (Array.isArray(payload?.models)) {
+      updateModelOptions(payload.models, payload.model_dir);
+    }
+  }
+
+  function updateModelOptions(models, defaultModelDir = "") {
+    state.models = Array.isArray(models) ? models : [];
+    const saved = loadSettings();
+    const modelOptions = [
+      '<option value="">自动选择本地模型</option>',
+      ...state.models.map((model) => {
+        const label = `${model.name || model.model_dir}${model.default ? "（默认）" : ""}`;
+        return `<option value="${flags.escapeHtml(model.model_dir || "")}">${flags.escapeHtml(label)}</option>`;
+      }),
+    ].join("");
+    ["#singleModel", "#batchModel"].forEach((selector) => {
+      const element = $(selector);
+      if (!element) return;
+      const current = element.value || saved[selector.includes("single") ? "singleModel" : "batchModel"] || "";
+      element.innerHTML = modelOptions;
+      element.value = state.models.some((item) => item.model_dir === current) ? current : "";
+    });
+
+    const modelList = $("#modelList");
+    if (!modelList) return;
+    if (!state.models.length) {
+      modelList.innerHTML = emptyCard("未发现本地模型", "请把完整模型目录放到 models/，目录内需要 model.onnx 和 selected_tags.csv。");
+      return;
+    }
+    modelList.innerHTML = state.models.map((model) => `
+      <article class="model-card ${model.model_dir === defaultModelDir || model.default ? "selected" : ""}">
+        <h4>${flags.escapeHtml(model.name || "local model")}</h4>
+        <p>${flags.escapeHtml(model.model_dir || "")}</p>
+      </article>
+    `).join("");
   }
 
   function parseHeaders(response) {
@@ -297,6 +342,32 @@
     if (select) select.disabled = !isJson;
   }
 
+  function syncRangeValue(input) {
+    const output = $(`#${input.id}Value`);
+    if (output) output.textContent = Number(input.value || 0).toFixed(2);
+  }
+
+  function syncRangeValues() {
+    ["#singleGeneral", "#singleCharacter", "#batchGeneral", "#batchCharacter"].forEach((selector) => {
+      const input = $(selector);
+      if (input) syncRangeValue(input);
+    });
+  }
+
+  function clearSingleFile() {
+    const input = $("#singleFile");
+    if (input) input.value = "";
+    $("#singlePreview").classList.add("muted");
+    $("#singlePreview").innerHTML = "尚未选择图片";
+  }
+
+  function clearBatchFiles() {
+    const input = $("#batchFilesInput");
+    if (input) input.value = "";
+    $("#batchFileList").classList.add("muted");
+    $("#batchFileList").innerHTML = "尚未选择文件";
+  }
+
   async function readError(response, contentType) {
     if (contentType.includes("application/json")) {
       const payload = await response.json();
@@ -326,6 +397,9 @@
     form.append("lang", settings[`${prefix}Lang`]);
     form.append("translation_mode", settings[`${prefix}Lang`]);
     form.append("output_filename_template", settings.outputTemplate);
+    if (settings[`${prefix}Model`]) {
+      form.append("model_dir", settings[`${prefix}Model`]);
+    }
   }
 
   async function submitSingle() {
@@ -366,7 +440,7 @@
         const blob = await response.blob();
         const filename = extractFilename(headers.disposition, "tagged_image.bin");
         $("#singleDownloadArea").innerHTML = "";
-        addDownloadLink("下载图片", blob, filename);
+        addDownloadLink("single", "下载图片", blob, filename);
         $("#singleResultArea").innerHTML = `<div class="summary-card"><h4>文件已生成</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
         $("#singleFlagArea").innerHTML = emptyCard("导出图像", "tagimg 模式由后端导出图片文件。");
       }
@@ -421,14 +495,14 @@
         $("#batchDownloadArea").innerHTML = "";
         const jsonBlob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
         const csvBlob = new Blob([buildBatchCsv(payload)], { type: "text/csv;charset=utf-8" });
-        if (settings.batchExportMode === "json" || settings.batchExportMode === "both") addDownloadLink("JSON", jsonBlob, "results.json");
-        if (settings.batchExportMode === "csv" || settings.batchExportMode === "both") addDownloadLink("CSV", csvBlob, "results.csv");
+        if (settings.batchExportMode === "json" || settings.batchExportMode === "both") addDownloadLink("batch", "JSON", jsonBlob, "results.json");
+        if (settings.batchExportMode === "csv" || settings.batchExportMode === "both") addDownloadLink("batch", "CSV", csvBlob, "results.csv");
         if (settings.batchExportMode === "inline") clearDownloads("batch");
       } else {
         const blob = await response.blob();
         const filename = extractFilename(headers.disposition, "tagged_images.zip");
         $("#batchDownloadArea").innerHTML = "";
-        addDownloadLink("下载 ZIP", blob, filename);
+        addDownloadLink("batch", "下载 ZIP", blob, filename);
         $("#batchResultArea").innerHTML = `<div class="summary-card"><h4>批量导出</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
         $("#batchFlagArea").innerHTML = emptyCard("ZIP 结果", "ZIP 结果由后端直接返回。");
       }
@@ -479,6 +553,8 @@
       "#batchExportMode",
       "#singleLang",
       "#batchLang",
+      "#singleModel",
+      "#batchModel",
       "#singleGeneral",
       "#singleCharacter",
       "#batchGeneral",
@@ -491,22 +567,44 @@
       const element = $(selector);
       if (element) element.addEventListener("change", () => saveSettings());
     });
+    ["#singleGeneral", "#singleCharacter", "#batchGeneral", "#batchCharacter"].forEach((selector) => {
+      const element = $(selector);
+      if (!element) return;
+      element.addEventListener("input", () => syncRangeValue(element));
+      element.addEventListener("change", () => {
+        syncRangeValue(element);
+        saveSettings();
+      });
+    });
     $("#batchType").addEventListener("change", toggleBatchExportMode);
+    $$(".upload-card").forEach((card) => {
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        const input = $(`#${card.dataset.input}`);
+        if (input) input.click();
+      });
+    });
+    $("#singleClear").addEventListener("click", clearSingleFile);
+    $("#batchClear").addEventListener("click", clearBatchFiles);
     $("#singleFile").addEventListener("change", () => {
       const file = $("#singleFile").files[0];
       $("#singlePreview").textContent = file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "尚未选择图片";
       if (file) {
+        $("#singlePreview").classList.remove("muted");
         const reader = new FileReader();
         reader.onload = () => {
-          $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" />`;
+          $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" /><div class="preview-meta"><strong>${flags.escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span></div>`;
         };
         reader.readAsDataURL(file);
+      } else {
+        clearSingleFile();
       }
     });
     $("#batchFilesInput").addEventListener("change", () => {
       const files = Array.from($("#batchFilesInput").files || []);
+      $("#batchFileList").classList.toggle("muted", !files.length);
       $("#batchFileList").innerHTML = files.length
-        ? files.map((file) => `<div>${flags.escapeHtml(file.name)} <span class="muted">(${Math.round(file.size / 1024)} KB)</span></div>`).join("")
+        ? files.map((file) => `<div class="file-row"><span>${flags.escapeHtml(file.name)}</span><b>${Math.round(file.size / 1024)} KB</b></div>`).join("")
         : "尚未选择文件";
     });
   }

@@ -7,6 +7,7 @@ import sys
 import zipfile
 from contextlib import asynccontextmanager
 from io import BytesIO
+from pathlib import Path
 from time import perf_counter
 from typing import Literal
 
@@ -20,6 +21,7 @@ from wd_tagger.config import (
     DEFAULT_CHARACTER_THRESHOLD,
     DEFAULT_GENERAL_THRESHOLD,
     DEFAULT_ONNX_REPO,
+    discover_local_model_dirs,
     find_local_model_dir,
     get_default_onnx_providers,
 )
@@ -189,6 +191,53 @@ MODEL_DIR = os.getenv("WD_TAGGER_MODEL_DIR") or find_local_model_dir(
 PROVIDERS = parse_provider_env()
 
 
+def list_local_models() -> list[dict[str, str | bool]]:
+    models = []
+    default_dir = str(Path(MODEL_DIR).resolve()) if MODEL_DIR else None
+    for model_dir in discover_local_model_dirs(project_root=SERVICE.runtime.project_root):
+        resolved = str(model_dir.resolve())
+        models.append(
+            {
+                "name": model_dir.name,
+                "model_dir": resolved,
+                "repo_id": f"SmilingWolf/{model_dir.name}" if model_dir.name.startswith("wd-") else MODEL_REPO,
+                "default": resolved == default_dir,
+            }
+        )
+    if default_dir and not any(item["model_dir"] == default_dir for item in models):
+        models.insert(
+            0,
+            {
+                "name": Path(default_dir).name,
+                "model_dir": default_dir,
+                "repo_id": MODEL_REPO,
+                "default": True,
+            },
+        )
+    return models
+
+
+def resolve_requested_model(model_dir: str | None = None, repo_id: str | None = None) -> tuple[str, str | None]:
+    selected_repo = (repo_id or MODEL_REPO).strip() or MODEL_REPO
+    requested_dir = (model_dir or "").strip()
+    if not requested_dir:
+        return selected_repo, MODEL_DIR
+
+    requested_path = Path(requested_dir).expanduser()
+    try:
+        resolved_requested = str(requested_path.resolve())
+    except OSError:
+        raise HTTPException(status_code=400, detail="Invalid model_dir")
+
+    allowed_dirs = {str(Path(item["model_dir"]).resolve()) for item in list_local_models() if item.get("model_dir")}
+    if resolved_requested not in allowed_dirs:
+        raise HTTPException(status_code=400, detail="model_dir must be one of the discovered local models")
+
+    matched = next((item for item in list_local_models() if item["model_dir"] == resolved_requested), None)
+    selected_repo = str(matched.get("repo_id") or selected_repo) if matched else selected_repo
+    return selected_repo, resolved_requested
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     yield
@@ -242,10 +291,13 @@ def build_options(
     character_mcut: bool,
     lang: Literal["zh", "en"] | None = None,
     translation_mode: str = "zh",
+    model_dir: str | None = None,
+    repo_id: str | None = None,
 ) -> PredictionOptions:
+    selected_repo, selected_model_dir = resolve_requested_model(model_dir=model_dir, repo_id=repo_id)
     return PredictionOptions(
-        repo_id=MODEL_REPO,
-        model_dir=MODEL_DIR,
+        repo_id=selected_repo,
+        model_dir=selected_model_dir,
         general_threshold=general_threshold,
         character_threshold=character_threshold,
         general_mcut=general_mcut,
@@ -263,6 +315,7 @@ def index() -> dict:
         "docs": "/docs",
         "redoc": "/redoc",
         "health": "/health",
+        "models": "/models",
         "tag_endpoint": "/tag",
         "tag_stream_endpoint": "/tag/stream",
         "batch_tag_endpoint": "/tag/batch",
@@ -274,6 +327,7 @@ def index() -> dict:
 
 @app.get("/health", summary="Health Check")
 def health() -> dict:
+    models = list_local_models()
     return {
         "status": "ok",
         "python": sys.executable,
@@ -281,6 +335,17 @@ def health() -> dict:
         "model_dir": MODEL_DIR,
         "providers": PROVIDERS,
         "auth_enabled": bool(get_expected_api_key()),
+        "models": models,
+        "model_count": len(models),
+    }
+
+
+@app.get("/models", summary="List Local Models")
+def models(_: str = Security(require_api_key)) -> dict:
+    return {
+        "default_model_dir": MODEL_DIR,
+        "repo_id": MODEL_REPO,
+        "models": list_local_models(),
     }
 
 
@@ -293,6 +358,8 @@ async def tag_image(
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
     translation_mode: str = Form("zh"),
+    model_dir: str | None = Form(None),
+    repo_id: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = perf_counter()
@@ -307,6 +374,8 @@ async def tag_image(
             character_mcut,
             lang,
             translation_mode,
+            model_dir,
+            repo_id,
         ),
         providers=PROVIDERS,
     )
@@ -327,6 +396,8 @@ async def tag_image_stream(
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
     translation_mode: str = Query("zh"),
+    model_dir: str | None = Query(None),
+    repo_id: str | None = Query(None),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
@@ -342,6 +413,8 @@ async def tag_image_stream(
             character_mcut,
             lang,
             translation_mode,
+            model_dir,
+            repo_id,
         ),
         providers=PROVIDERS,
     )
@@ -361,6 +434,8 @@ async def tag_images_batch(
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
     translation_mode: str = Form("zh"),
+    model_dir: str | None = Form(None),
+    repo_id: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = perf_counter()
@@ -382,6 +457,8 @@ async def tag_images_batch(
             character_mcut,
             lang,
             translation_mode,
+            model_dir,
+            repo_id,
         ),
         providers=PROVIDERS,
         process_type="json",
@@ -403,6 +480,8 @@ async def tag_images_batch_stream(
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
     translation_mode: str = Query("zh"),
+    model_dir: str | None = Query(None),
+    repo_id: str | None = Query(None),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
@@ -419,6 +498,8 @@ async def tag_images_batch_stream(
             character_mcut,
             lang,
             translation_mode,
+            model_dir,
+            repo_id,
         ),
         providers=PROVIDERS,
         process_type="json",
@@ -449,6 +530,8 @@ async def process_stream_endpoint(
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
     translation_mode: str = Query("zh"),
+    model_dir: str | None = Query(None),
+    repo_id: str | None = Query(None),
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> Response:
@@ -460,6 +543,8 @@ async def process_stream_endpoint(
         character_mcut,
         lang,
         translation_mode,
+        model_dir,
+        repo_id,
     )
 
     if type in SINGLE_TYPES:
@@ -518,6 +603,8 @@ async def process_endpoint(
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
     translation_mode: str = Form("zh"),
+    model_dir: str | None = Form(None),
+    repo_id: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> Response:
     request_started = perf_counter()
@@ -528,6 +615,8 @@ async def process_endpoint(
         character_mcut,
         lang,
         translation_mode,
+        model_dir,
+        repo_id,
     )
 
     if type in SINGLE_TYPES:
