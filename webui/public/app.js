@@ -37,6 +37,10 @@
     singlePreviewUrl: null,
     lastSingleRequest: null,
     lastSingleTiming: null,
+    singleUploadRequestId: 0,
+    singleUpload: null,
+    batchUploadRequestId: 0,
+    batchUpload: null,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -149,6 +153,94 @@
 
   function emptyCard(title, text) {
     return `<div class="empty-card"><h4>${flags.escapeHtml(title)}</h4><p>${flags.escapeHtml(text)}</p></div>`;
+  }
+
+  function fileSignature(file) {
+    return [file.name || "", file.size || 0, file.lastModified || 0].join(":");
+  }
+
+  async function uploadImageFile(file) {
+    const form = new FormData();
+    form.append("image", file, file.name);
+    const response = await fetch("/uploads/image", {
+      method: "POST",
+      body: form,
+      credentials: "same-origin",
+    });
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok) {
+      throw new Error(await readError(response, contentType));
+    }
+    return response.json();
+  }
+
+  function startSingleUpload(file) {
+    const requestId = ++state.singleUploadRequestId;
+    const signature = fileSignature(file);
+    const promise = uploadImageFile(file).then((payload) => {
+      const record = {
+        requestId,
+        signature,
+        uploadId: String(payload.upload_id || ""),
+        filename: String(payload.filename || file.name || "image.png"),
+      };
+      if (state.singleUploadRequestId === requestId) {
+        state.singleUpload = { ...record, promise: Promise.resolve(record) };
+      }
+      return record;
+    }).catch((error) => {
+      if (state.singleUploadRequestId === requestId) {
+        state.singleUpload = { requestId, signature, error };
+      }
+      throw error;
+    });
+    state.singleUpload = { requestId, signature, promise };
+    return promise;
+  }
+
+  async function ensureSingleUpload(file) {
+    const signature = fileSignature(file);
+    if (state.singleUpload && state.singleUpload.signature === signature) {
+      if (state.singleUpload.uploadId) return state.singleUpload;
+      if (state.singleUpload.promise) return state.singleUpload.promise;
+      if (state.singleUpload.error) throw state.singleUpload.error;
+    }
+    return startSingleUpload(file);
+  }
+
+  function startBatchUploads(files) {
+    const requestId = ++state.batchUploadRequestId;
+    const signature = files.map(fileSignature).join("|");
+    const promise = Promise.all(files.map(async (file) => {
+      const payload = await uploadImageFile(file);
+      return {
+        uploadId: String(payload.upload_id || ""),
+        filename: String(payload.filename || file.name || "image.png"),
+        signature: fileSignature(file),
+      };
+    })).then((records) => {
+      if (state.batchUploadRequestId === requestId) {
+        state.batchUpload = { requestId, signature, records, promise: Promise.resolve(records) };
+      }
+      return records;
+    }).catch((error) => {
+      if (state.batchUploadRequestId === requestId) {
+        state.batchUpload = { requestId, signature, error };
+      }
+      throw error;
+    });
+    state.batchUpload = { requestId, signature, promise };
+    return promise;
+  }
+
+  async function ensureBatchUploads(files) {
+    const signature = files.map(fileSignature).join("|");
+    if (state.batchUpload && state.batchUpload.signature === signature) {
+      if (Array.isArray(state.batchUpload.records)) return state.batchUpload.records;
+      if (state.batchUpload.promise) return state.batchUpload.promise;
+      if (state.batchUpload.error) throw state.batchUpload.error;
+    }
+    return startBatchUploads(files);
   }
 
   function renderBackendStatus(payload, error = null) {
@@ -294,7 +386,7 @@
     renderSingleExportState({ enabled: false, hint });
   }
 
-  function buildSingleSourceSnapshot(settings) {
+  async function buildSingleSourceSnapshot(settings) {
     if (settings.singleSource === "singleUrl") {
       const url = $("#singleUrlInput").value.trim();
       if (!url) throw new Error("请先填写图片 URL");
@@ -302,7 +394,12 @@
     }
     const file = $("#singleFile").files[0];
     if (!file) throw new Error("请先选择图片");
-    return { kind: "file", file };
+    const upload = await ensureSingleUpload(file);
+    return {
+      kind: "upload",
+      uploadId: upload.uploadId,
+      filename: upload.filename || file.name,
+    };
   }
 
   function appendSingleSource(form, sourceSnapshot) {
@@ -310,7 +407,7 @@
       form.append("image_url", sourceSnapshot.url);
       return;
     }
-    form.append("image", sourceSnapshot.file, sourceSnapshot.file.name);
+    form.append("image_ref", sourceSnapshot.uploadId);
   }
 
   function clearDownloads(scope) {
@@ -563,7 +660,7 @@
     setBusy(true);
     const start = performance.now();
     try {
-      const sourceSnapshot = buildSingleSourceSnapshot(settings);
+      const sourceSnapshot = await buildSingleSourceSnapshot(settings);
       const form = new FormData();
       form.append("type", settings.singleType);
       appendCommonOptions(form, settings, "single");
@@ -664,7 +761,8 @@
       if (settings.batchSource === "batchFiles") {
         const files = Array.from($("#batchFilesInput").files || []);
         if (!files.length) throw new Error("请先选择批量图片");
-        files.forEach((file) => form.append("images", file, file.name));
+        const uploadedFiles = await ensureBatchUploads(files);
+        form.append("image_refs", uploadedFiles.map((item) => item.uploadId).join(","));
       } else if (settings.batchSource === "batchUrls") {
         const urls = $("#batchUrlInput").value
           .split(/[\n,;|]+/)
@@ -770,6 +868,7 @@
     $("#singlePreview").textContent = file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "尚未选择图片";
     if (file) {
       invalidateSingleRequest();
+      void ensureSingleUpload(file).catch(() => {});
       $("#singlePreview").classList.remove("muted");
       state.singlePreviewUrl = URL.createObjectURL(file);
       $("#singlePreview").innerHTML = `<img src="${state.singlePreviewUrl}" alt="preview" /><div class="preview-meta"><strong>${flags.escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span></div>`;
@@ -780,6 +879,12 @@
 
   function updateBatchFileList() {
     const files = Array.from($("#batchFilesInput").files || []);
+    if (files.length) {
+      void ensureBatchUploads(files).catch(() => {});
+    } else {
+      state.batchUploadRequestId += 1;
+      state.batchUpload = null;
+    }
     $("#batchFileList").classList.toggle("muted", !files.length);
     $("#batchFileList").innerHTML = files.length
       ? files.map((file) => `<div class="file-row"><span>${flags.escapeHtml(file.name)}</span><b>${Math.round(file.size / 1024)} KB</b></div>`).join("")
@@ -831,8 +936,10 @@
       "#batchModel",
       "#singleGeneral",
       "#singleCharacter",
+      "#singleSensitive",
       "#batchGeneral",
       "#batchCharacter",
+      "#batchSensitive",
       "#singleGeneralMcut",
       "#singleCharacterMcut",
       "#batchGeneralMcut",
@@ -841,7 +948,7 @@
       const element = $(selector);
       if (element) element.addEventListener("change", () => saveSettings());
     });
-    ["#singleGeneral", "#singleCharacter", "#batchGeneral", "#batchCharacter"].forEach((selector) => {
+    ["#singleGeneral", "#singleCharacter", "#singleSensitive", "#batchGeneral", "#batchCharacter", "#batchSensitive"].forEach((selector) => {
       const element = $(selector);
       if (!element) return;
       element.addEventListener("input", () => syncRangeValue(element));
@@ -864,6 +971,8 @@
   function clearSingleFile() {
     const input = $("#singleFile");
     if (input) input.value = "";
+    state.singleUploadRequestId += 1;
+    state.singleUpload = null;
     revokeSinglePreviewUrl();
     invalidateSingleRequest("已清空当前图片；如需导出，请重新选择并识别。");
     $("#singlePreview").classList.add("muted");
@@ -873,6 +982,8 @@
   function clearBatchFiles() {
     const input = $("#batchFilesInput");
     if (input) input.value = "";
+    state.batchUploadRequestId += 1;
+    state.batchUpload = null;
     $("#batchFileList").classList.add("muted");
     $("#batchFileList").innerHTML = "尚未选择文件";
   }

@@ -190,11 +190,37 @@ Shared form fields:
 Optional inputs:
 
 - `image`: for single-image modes
+- `image_ref`: temporary upload reference returned by `/uploads/image`
 - `image_url`: for single-image modes using a network URL
 - `images`: for uploaded batch modes
+- `image_refs`: comma-separated temporary upload references returned by `/uploads/image`
 - `image_urls`: for batch modes using network URLs. Split multiple URLs with comma, semicolon, pipe, or newline
 - `input_dir`: server-side directory path for batch modes
 - `export_format`: only used by `type=json`, values are `inline`, `json`, `csv`, `both`
+
+## Temporary Upload Endpoint
+
+```http
+POST /uploads/image
+```
+
+This endpoint stores a single uploaded image under the backend cache directory and returns a temporary reference ID. The static WebUI now uses this flow to mimic Gradio's `filepath` behavior: upload first, process later by reference.
+
+Form fields:
+
+- `image`
+
+Example response:
+
+```json
+{
+  "upload_id": "7f5f0d5d6b0b4c87a81df08d77d3c1d2",
+  "filename": "demo.png",
+  "content_type": "image/png",
+  "size": 182734,
+  "md5": "..."
+}
+```
 
 ## Stream Upload Endpoint
 

@@ -5,13 +5,16 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
+import shutil
 import sys
 import zipfile
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time
 from typing import Literal
+from uuid import uuid4
 
 from fastapi import Cookie, FastAPI, File, Form, Header, HTTPException, Query, Request, Security, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -310,8 +313,109 @@ def resolve_requested_model(model_dir: str | None = None, repo_id: str | None = 
     return selected_repo, resolved_requested
 
 
+UPLOAD_ROOT = SERVICE.runtime.cache_dir / "webui_uploads"
+UPLOAD_TTL_SECONDS = max(60, int(os.getenv("WD_TAGGER_UPLOAD_TTL_SECONDS", "86400")))
+UPLOAD_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+
+
+def ensure_upload_root() -> Path:
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    return UPLOAD_ROOT
+
+
+def cleanup_upload_root(*, max_age_seconds: int = UPLOAD_TTL_SECONDS) -> None:
+    root = ensure_upload_root()
+    now = time()
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            if now - entry.stat().st_mtime > max_age_seconds:
+                shutil.rmtree(entry, ignore_errors=True)
+        except FileNotFoundError:
+            continue
+
+
+def _validate_upload_id(upload_id: str) -> str:
+    upload_id = upload_id.strip()
+    if not UPLOAD_ID_PATTERN.fullmatch(upload_id):
+        raise HTTPException(status_code=400, detail="Invalid upload reference")
+    return upload_id
+
+
+def _resolve_uploaded_file(upload_id: str) -> Path:
+    upload_dir = ensure_upload_root() / _validate_upload_id(upload_id)
+    if not upload_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Upload reference not found")
+    files = [path for path in upload_dir.iterdir() if path.is_file()]
+    if len(files) != 1:
+        raise HTTPException(status_code=404, detail="Upload reference is invalid")
+    return files[0]
+
+
+def _load_source_from_path(path: Path) -> ImageSource:
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Upload file not found")
+    content = path.read_bytes()
+    content_type = normalize_image_content_type(None, path.name)
+    return ImageSource.from_bytes(
+        filename=path.name,
+        content_type=content_type,
+        source_bytes=content,
+        source_path=str(path),
+    )
+
+
+def load_uploaded_source(upload_id: str) -> ImageSource:
+    return _load_source_from_path(_resolve_uploaded_file(upload_id))
+
+
+def load_uploaded_sources(upload_ids: str | list[str] | None) -> list[ImageSource]:
+    if upload_ids is None:
+        return []
+    if isinstance(upload_ids, str):
+        parts = [part.strip() for part in upload_ids.split(",") if part.strip()]
+    else:
+        parts = [str(part).strip() for part in upload_ids if str(part).strip()]
+    if not parts:
+        return []
+    return [load_uploaded_source(upload_id) for upload_id in parts]
+
+
+async def save_uploaded_file(image: UploadFile) -> dict[str, object]:
+    ensure_upload_root()
+    upload_id = uuid4().hex
+    upload_dir = UPLOAD_ROOT / upload_id
+    upload_dir.mkdir(parents=True, exist_ok=False)
+    filename = Path(image.filename or "upload.png").name or "upload.png"
+    content_type = normalize_image_content_type(image.content_type, filename)
+    target = upload_dir / filename
+    digest = hashlib.md5()
+    size = 0
+    try:
+        with target.open("wb") as output:
+            while True:
+                chunk = await image.read(STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                output.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+    except Exception:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise
+    return {
+        "upload_id": upload_id,
+        "filename": filename,
+        "content_type": content_type,
+        "size": size,
+        "md5": digest.hexdigest(),
+    }
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    cleanup_upload_root()
     yield
 
 
@@ -479,10 +583,18 @@ def models(_: str = Security(require_api_key)) -> dict:
     }
 
 
+@app.post("/uploads/image", summary="Upload Image To Temporary Cache")
+async def upload_image(image: UploadFile = File(..., description="Image file to cache for later processing"), _: str = Security(require_api_key)) -> dict[str, object]:
+    payload = await save_uploaded_file(image)
+    cleanup_upload_root()
+    return payload
+
+
 @app.post("/tag", summary="Tag Image")
 async def tag_image(
     request: Request,
-    image: UploadFile = File(..., description="Image file to analyze"),
+    image: UploadFile | None = File(None, description="Image file to analyze"),
+    image_ref: str | None = Form(None, description="Temporary upload reference returned by /uploads/image"),
     general_threshold: float = Form(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
     sensitive_threshold: float = Form(DEFAULT_SENSITIVE_THRESHOLD),
@@ -495,7 +607,12 @@ async def tag_image(
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = get_request_started_at(request)
-    source = await read_upload_image(image)
+    if image_ref and image_ref.strip():
+        source = load_uploaded_source(image_ref)
+    elif image is not None:
+        source = await read_upload_image(image)
+    else:
+        raise HTTPException(status_code=400, detail="Either image or image_ref is required")
     try:
         process_started = perf_counter()
         payload = SERVICE.predict_from_source(
@@ -569,7 +686,8 @@ async def tag_image_stream(
 @app.post("/tag/batch", summary="Tag Images In Batch")
 async def tag_images_batch(
     request: Request,
-    images: list[UploadFile] = File(..., description="Multiple image files to analyze"),
+    images: list[UploadFile] | None = File(None, description="Multiple image files to analyze"),
+    image_refs: str | None = Form(None, description="Comma-separated temporary upload references"),
     general_threshold: float = Form(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
     sensitive_threshold: float = Form(DEFAULT_SENSITIVE_THRESHOLD),
@@ -582,12 +700,14 @@ async def tag_images_batch(
     _: str = Security(require_api_key),
 ) -> JSONResponse:
     request_started = get_request_started_at(request)
-    if not images:
+    if not images and not (image_refs and image_refs.strip()):
         raise HTTPException(status_code=400, detail="At least one image is required")
 
     sources = []
     try:
-        for image in images:
+        if image_refs and image_refs.strip():
+            sources.extend(load_uploaded_sources(image_refs))
+        for image in images or []:
             sources.append(await read_upload_image(image))
 
         process_started = perf_counter()
@@ -747,6 +867,8 @@ async def process_endpoint(
     type: str = Form(..., description="tag | arrary | tagimg | json | mulitagimg"),
     image: UploadFile | None = File(None, description="Single image"),
     images: list[UploadFile] | None = File(None, description="Multiple images"),
+    image_ref: str | None = Form(None, description="Temporary upload reference returned by /uploads/image"),
+    image_refs: str | None = Form(None, description="Comma-separated temporary upload references"),
     image_url: str | None = Form(None, description="Single image URL"),
     image_urls: str | None = Form(None, description="Multiple image URLs split by comma, semicolon, pipe, or newline"),
     input_dir: str | None = Form(None, description="Server-side directory path for batch processing"),
@@ -783,7 +905,9 @@ async def process_endpoint(
     )
 
     if type in SINGLE_TYPES:
-        if image is not None:
+        if image_ref and image_ref.strip():
+            source = load_uploaded_source(image_ref)
+        elif image is not None:
             source = await read_upload_image(image)
         elif image_url and image_url.strip():
             try:
@@ -811,6 +935,8 @@ async def process_endpoint(
     if type in BATCH_TYPES:
         sources = []
         try:
+            if image_refs and image_refs.strip():
+                sources.extend(load_uploaded_sources(image_refs))
             if images:
                 for upload in images:
                     sources.append(await read_upload_image(upload))
