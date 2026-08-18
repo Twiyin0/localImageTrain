@@ -81,6 +81,10 @@
               <span>角色标签阈值 <b id="singleCharacterValue">0.85</b></span>
               <input id="singleCharacter" type="range" min="0" max="1" step="0.05" />
             </label>
+            <label class="range-field">
+              <span>Sensitive 阈值 <b id="singleSensitiveValue">0.70</b></span>
+              <input id="singleSensitive" type="range" min="0" max="1" step="0.05" />
+            </label>
           </div>
 
           <div class="toggles">
@@ -107,7 +111,11 @@
             <div id="singleFlagArea" class="flag-section"></div>
           </div>
           <div id="singleExportTab" class="result-pane">
-            <div class="export-hint">处理完成后会在这里生成带元数据的图片；tag / arrary 模式会同时展示标签结果。</div>
+            <div class="export-hint">处理完成后会在这里生成带元数据的图片；如果希望处理完成后直接显示导出文件，请将返回类型改为“导出写回标签图像”。</div>
+            <div class="export-actions">
+              <button id="singleExportGenerate" class="btn btn-small btn-ghost" type="button" disabled>生成带 tag 图片</button>
+              <span id="singleExportHint" class="muted">先执行单张识别，再按需生成导出图片。</span>
+            </div>
             <div id="singleDownloadArea" class="downloads"></div>
           </div>
           <div id="singleTimingTab" class="result-pane">
@@ -187,6 +195,10 @@
             <label class="range-field">
               <span>角色标签阈值 <b id="batchCharacterValue">0.85</b></span>
               <input id="batchCharacter" type="range" min="0" max="1" step="0.05" />
+            </label>
+            <label class="range-field">
+              <span>Sensitive 阈值 <b id="batchSensitiveValue">0.70</b></span>
+              <input id="batchSensitive" type="range" min="0" max="1" step="0.05" />
             </label>
           </div>
 

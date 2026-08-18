@@ -31,6 +31,7 @@ from wd_tagger.config import (
     find_local_model_dir,
     get_runtime_paths,
 )
+from wd_tagger.content_flags import summarize_risk
 from wd_tagger.models import OnnxTagger, mcut_threshold
 from wd_tagger.translation import translate_terms_from_table
 from wd_tagger.utils import ensure_dir
@@ -283,6 +284,13 @@ class ImageSource:
     content_type: str
     source_path: str | None = None
     source_bytes: bytes | None = None
+    source_md5: str | None = None
+
+    def close(self) -> None:
+        try:
+            self.image.close()
+        except Exception:
+            pass
 
     @classmethod
     def from_bytes(
@@ -292,6 +300,8 @@ class ImageSource:
         content_type: str,
         source_bytes: bytes,
         source_path: str | None = None,
+        keep_source_bytes: bool = False,
+        source_md5: str | None = None,
     ) -> ImageSource:
         with Image.open(BytesIO(source_bytes)) as image_file:
             image = image_file.convert("RGBA")
@@ -300,7 +310,8 @@ class ImageSource:
             image=image,
             content_type=content_type,
             source_path=source_path,
-            source_bytes=source_bytes,
+            source_bytes=source_bytes if keep_source_bytes else None,
+            source_md5=source_md5 or hashlib.md5(source_bytes).hexdigest(),
         )
 
 
@@ -310,6 +321,7 @@ class PredictionOptions:
     model_dir: str | None = None
     general_threshold: float = DEFAULT_GENERAL_THRESHOLD
     character_threshold: float = DEFAULT_CHARACTER_THRESHOLD
+    sensitive_threshold: float = 0.7
     general_mcut: bool = False
     character_mcut: bool = False
     lang: str | None = None
@@ -633,6 +645,14 @@ class TaggerService:
         image.convert("RGBA").save(buffer, format="PNG")
         return buffer.getvalue()
 
+    @staticmethod
+    def _hash_image_pixels(image: Image.Image) -> str:
+        rgba = image if image.mode == "RGBA" else image.convert("RGBA")
+        digest = hashlib.md5()
+        digest.update(f"{rgba.width}x{rgba.height}:{rgba.mode}".encode("ascii"))
+        digest.update(rgba.tobytes())
+        return digest.hexdigest()
+
     def _get_source_bytes(self, source: ImageSource) -> bytes:
         if source.source_bytes is not None:
             return source.source_bytes
@@ -813,8 +833,8 @@ class TaggerService:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         model_dir = self._resolve_model_dir(options.repo_id, options.model_dir)
         model_key = self._build_model_key(options.repo_id, model_dir, providers)
-        source_md5 = self._hash_bytes(self._get_source_bytes(source))
-        pixel_md5 = self._hash_bytes(self._image_to_png_bytes(source.image))
+        source_md5 = source.source_md5 or self._hash_bytes(self._get_source_bytes(source))
+        pixel_md5 = self._hash_image_pixels(source.image)
         signature = self._compute_visual_signature(source.image)
 
         if self.exact_cache_enabled:
@@ -993,6 +1013,7 @@ class TaggerService:
         )
         inference_elapsed_ms = round((perf_counter() - inference_started_at) * 1000, 2)
         payload = self._finalize_payload(raw, options, cache_info)
+        payload["risk"] = summarize_risk(payload, sensitive_threshold=options.sensitive_threshold)
         metrics = collect_process_metrics()
         metrics.update(
             {
@@ -1133,44 +1154,55 @@ class TaggerService:
             ensure_ascii=False,
         )
 
-        image = source.image.copy()
-        if safe_suffix == ".png":
-            png_info = PngImagePlugin.PngInfo()
-            png_info.add_text("Caption", caption)
-            png_info.add_text("Tags", ", ".join(tags))
-            png_info.add_text("Description", caption)
-            png_info.add_text("Comment", caption)
-            png_info.add_text("parameters", caption)
-            png_info.add_text("CaptionDisplay", caption_display)
-            png_info.add_text("WDTagger", metadata_text)
-            image.save(output_path, pnginfo=png_info)
-            return output_path
+        try:
+            image = source.image.copy()
+            if safe_suffix == ".png":
+                png_info = PngImagePlugin.PngInfo()
+                png_info.add_text("Caption", caption)
+                png_info.add_text("Tags", ", ".join(tags))
+                png_info.add_text("Description", caption)
+                png_info.add_text("Comment", caption)
+                png_info.add_text("parameters", caption)
+                png_info.add_text("CaptionDisplay", caption_display)
+                png_info.add_text("WDTagger", metadata_text)
+                image.save(output_path, pnginfo=png_info)
+                return output_path
 
-        save_image = image.convert("RGB") if safe_suffix in {".jpg", ".jpeg"} else image
-        exif = save_image.getexif()
-        exif[IMAGE_DESCRIPTION_TAG] = caption
-        exif[XP_TITLE_TAG] = _encode_xp_text(Path(output_path).stem)
-        exif[XP_COMMENT_TAG] = _encode_xp_text(caption)
-        exif[XP_KEYWORDS_TAG] = _encode_xp_text(";".join(tags))
-        try:
-            exif[USER_COMMENT_TAG] = _encode_user_comment(metadata_text)
-        except Exception:
-            pass
-        try:
-            save_image.save(output_path, exif=exif.tobytes())
-            return output_path
-        except Exception:
-            fallback = ensure_unique_path(output_path.with_suffix(".png"))
-            png_info = PngImagePlugin.PngInfo()
-            png_info.add_text("Caption", caption)
-            png_info.add_text("Tags", ", ".join(tags))
-            png_info.add_text("Description", caption)
-            png_info.add_text("Comment", caption)
-            png_info.add_text("parameters", caption)
-            png_info.add_text("CaptionDisplay", caption_display)
-            png_info.add_text("WDTagger", metadata_text)
-            image.save(fallback, pnginfo=png_info)
-            return fallback
+            save_image = image.convert("RGB") if safe_suffix in {".jpg", ".jpeg"} else image
+            exif = save_image.getexif()
+            exif[IMAGE_DESCRIPTION_TAG] = caption
+            exif[XP_TITLE_TAG] = _encode_xp_text(Path(output_path).stem)
+            exif[XP_COMMENT_TAG] = _encode_xp_text(caption)
+            exif[XP_KEYWORDS_TAG] = _encode_xp_text(";".join(tags))
+            try:
+                exif[USER_COMMENT_TAG] = _encode_user_comment(metadata_text)
+            except Exception:
+                pass
+            try:
+                save_image.save(output_path, exif=exif.tobytes())
+                return output_path
+            except Exception:
+                fallback = ensure_unique_path(output_path.with_suffix(".png"))
+                png_info = PngImagePlugin.PngInfo()
+                png_info.add_text("Caption", caption)
+                png_info.add_text("Tags", ", ".join(tags))
+                png_info.add_text("Description", caption)
+                png_info.add_text("Comment", caption)
+                png_info.add_text("parameters", caption)
+                png_info.add_text("CaptionDisplay", caption_display)
+                png_info.add_text("WDTagger", metadata_text)
+                image.save(fallback, pnginfo=png_info)
+                return fallback
+        finally:
+            try:
+                if "save_image" in locals() and save_image is not image:
+                    save_image.close()
+            except Exception:
+                pass
+            try:
+                image.close()
+            except Exception:
+                pass
 
     def zip_paths(self, output_dir: Path, archive_name: str, files: list[Path]) -> Path:
         zip_path = ensure_unique_path(output_dir / sanitize_output_filename(archive_name, "archive.zip"))

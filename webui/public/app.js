@@ -18,8 +18,10 @@
     batchModel: "",
     singleGeneral: 0.35,
     singleCharacter: 0.85,
+    singleSensitive: 0.7,
     batchGeneral: 0.35,
     batchCharacter: 0.85,
+    batchSensitive: 0.7,
     singleGeneralMcut: false,
     singleCharacterMcut: false,
     batchGeneralMcut: false,
@@ -32,6 +34,9 @@
     models: [],
     singleDownloads: [],
     batchDownloads: [],
+    singlePreviewUrl: null,
+    lastSingleRequest: null,
+    lastSingleTiming: null,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -75,7 +80,7 @@
   }
 
   function syncRangeValues() {
-    ["#singleGeneral", "#singleCharacter", "#batchGeneral", "#batchCharacter"].forEach((selector) => {
+    ["#singleGeneral", "#singleCharacter", "#singleSensitive", "#batchGeneral", "#batchCharacter", "#batchSensitive"].forEach((selector) => {
       const input = $(selector);
       if (input) syncRangeValue(input);
     });
@@ -91,8 +96,10 @@
     applyValue("#batchModel", settings.batchModel);
     applyValue("#singleGeneral", settings.singleGeneral);
     applyValue("#singleCharacter", settings.singleCharacter);
+    applyValue("#singleSensitive", settings.singleSensitive);
     applyValue("#batchGeneral", settings.batchGeneral);
     applyValue("#batchCharacter", settings.batchCharacter);
+    applyValue("#batchSensitive", settings.batchSensitive);
     applyChecked("#singleGeneralMcut", settings.singleGeneralMcut);
     applyChecked("#singleCharacterMcut", settings.singleCharacterMcut);
     applyChecked("#batchGeneralMcut", settings.batchGeneralMcut);
@@ -113,8 +120,10 @@
       batchModel: $("#batchModel").value || "",
       singleGeneral: Number($("#singleGeneral").value || DEFAULTS.singleGeneral),
       singleCharacter: Number($("#singleCharacter").value || DEFAULTS.singleCharacter),
+      singleSensitive: Number($("#singleSensitive").value || DEFAULTS.singleSensitive),
       batchGeneral: Number($("#batchGeneral").value || DEFAULTS.batchGeneral),
       batchCharacter: Number($("#batchCharacter").value || DEFAULTS.batchCharacter),
+      batchSensitive: Number($("#batchSensitive").value || DEFAULTS.batchSensitive),
       singleGeneralMcut: $("#singleGeneralMcut").checked,
       singleCharacterMcut: $("#singleCharacterMcut").checked,
       batchGeneralMcut: $("#batchGeneralMcut").checked,
@@ -195,9 +204,25 @@
   }
 
   function parseHeaders(response) {
+    const riskSummaryRaw = response.headers.get("X-WD-Risk-Summary") || response.headers.get("x-wd-risk-summary");
+    let riskSummary = null;
+    if (riskSummaryRaw) {
+      try {
+        riskSummary = JSON.parse(riskSummaryRaw);
+      } catch {
+        riskSummary = null;
+      }
+    }
     return {
+      inferenceMs: response.headers.get("X-WD-Inference-Time-Ms") || response.headers.get("x-wd-inference-time-ms"),
       processMs: response.headers.get("X-WD-Backend-Process-Time-Ms") || response.headers.get("x-wd-backend-process-time-ms"),
+      prepareMs: response.headers.get("X-WD-Backend-Prepare-Time-Ms") || response.headers.get("x-wd-backend-prepare-time-ms"),
+      postInferenceMs: response.headers.get("X-WD-Backend-Post-Inference-Time-Ms") || response.headers.get("x-wd-backend-post-inference-time-ms"),
       totalMs: response.headers.get("X-WD-Backend-Total-Time-Ms") || response.headers.get("x-wd-backend-total-time-ms"),
+      cpuElapsedMs: response.headers.get("X-WD-Cpu-Elapsed-Ms") || response.headers.get("x-wd-cpu-elapsed-ms"),
+      cacheHit: response.headers.get("X-WD-Cache-Hit") || response.headers.get("x-wd-cache-hit"),
+      cacheSimilarity: response.headers.get("X-WD-Cache-Similarity-Score") || response.headers.get("x-wd-cache-similarity-score"),
+      riskSummary,
       rss: response.headers.get("X-WD-Process-Current-Rss-Mb") || response.headers.get("x-wd-process-current-rss-mb"),
       peakRss: response.headers.get("X-WD-Process-Peak-Rss-Mb") || response.headers.get("x-wd-process-peak-rss-mb"),
       cpuUser: response.headers.get("X-WD-Process-Cpu-User-Time-S") || response.headers.get("x-wd-process-cpu-user-time-s"),
@@ -209,9 +234,18 @@
 
   function renderTiming(targetSelector, headers, extra = {}) {
     const metrics = [
-      ["前端总耗时", extra.totalElapsedMs != null ? `${extra.totalElapsedMs} ms` : "-"],
-      ["后端模型耗时", headers.processMs ? `${headers.processMs} ms` : "-"],
+      ["前端首个请求耗时", extra.requestElapsedMs != null ? `${extra.requestElapsedMs} ms` : "-"],
+      ["前端导出附加耗时", extra.exportElapsedMs != null ? `${extra.exportElapsedMs} ms` : "-"],
+      ["前端端到端总耗时", extra.endToEndElapsedMs != null ? `${extra.endToEndElapsedMs} ms` : "-"],
+      ["后端请求准备耗时", headers.prepareMs ? `${headers.prepareMs} ms` : "-"],
+      ["后端纯推理耗时", headers.inferenceMs ? `${headers.inferenceMs} ms` : "-"],
+      ["后端推理后处理耗时", headers.postInferenceMs ? `${headers.postInferenceMs} ms` : "-"],
+      ["后端处理耗时", headers.processMs ? `${headers.processMs} ms` : "-"],
       ["后端总耗时", headers.totalMs ? `${headers.totalMs} ms` : "-"],
+      ["导出请求后端总耗时", extra.exportBackendTotalMs != null ? `${extra.exportBackendTotalMs} ms` : "-"],
+      ["缓存命中", headers.cacheHit || "-"],
+      ["缓存相似度", headers.cacheSimilarity ?? "-"],
+      ["本次 CPU 耗时", headers.cpuElapsedMs ? `${headers.cpuElapsedMs} ms` : "-"],
       ["当前 RSS", headers.rss ? `${headers.rss} MB` : "-"],
       ["峰值 RSS", headers.peakRss ? `${headers.peakRss} MB` : "-"],
       ["用户态 CPU", headers.cpuUser ? `${headers.cpuUser} s` : "-"],
@@ -220,6 +254,63 @@
     $(targetSelector).innerHTML = metrics.map(([name, value]) => (
       `<article class="metric-card"><h4>${flags.escapeHtml(name)}</h4><strong>${flags.escapeHtml(value)}</strong></article>`
     )).join("");
+  }
+
+  function renderSingleExportState({ enabled = false, busy = false, hint } = {}) {
+    const button = $("#singleExportGenerate");
+    const hintNode = $("#singleExportHint");
+    if (button) {
+      button.disabled = !enabled || busy;
+      button.textContent = busy ? "正在生成带 tag 图片..." : "生成带 tag 图片";
+    }
+    if (hintNode) {
+      hintNode.textContent = hint || (enabled
+        ? "识别结果已就绪；只有点这里时才会额外发起导出请求。"
+        : "先执行单张识别，再按需生成导出图片。");
+    }
+  }
+
+  function rememberSingleTiming(headers, requestElapsedMs) {
+    state.lastSingleTiming = { headers, requestElapsedMs };
+    renderTiming("#singleTimingArea", headers, {
+      requestElapsedMs,
+      endToEndElapsedMs: requestElapsedMs,
+    });
+  }
+
+  function updateSingleTimingAfterExport(exportHeaders, exportElapsedMs) {
+    if (!state.lastSingleTiming) return;
+    renderTiming("#singleTimingArea", state.lastSingleTiming.headers, {
+      requestElapsedMs: state.lastSingleTiming.requestElapsedMs,
+      exportElapsedMs,
+      endToEndElapsedMs: state.lastSingleTiming.requestElapsedMs + exportElapsedMs,
+      exportBackendTotalMs: exportHeaders.totalMs,
+    });
+  }
+
+  function invalidateSingleRequest(hint = "当前图片或来源已变化；如需导出，请先重新识别。") {
+    state.lastSingleRequest = null;
+    state.lastSingleTiming = null;
+    renderSingleExportState({ enabled: false, hint });
+  }
+
+  function buildSingleSourceSnapshot(settings) {
+    if (settings.singleSource === "singleUrl") {
+      const url = $("#singleUrlInput").value.trim();
+      if (!url) throw new Error("请先填写图片 URL");
+      return { kind: "url", url };
+    }
+    const file = $("#singleFile").files[0];
+    if (!file) throw new Error("请先选择图片");
+    return { kind: "file", file };
+  }
+
+  function appendSingleSource(form, sourceSnapshot) {
+    if (sourceSnapshot.kind === "url") {
+      form.append("image_url", sourceSnapshot.url);
+      return;
+    }
+    form.append("image", sourceSnapshot.file, sourceSnapshot.file.name);
   }
 
   function clearDownloads(scope) {
@@ -257,27 +348,53 @@
   function renderFlagSummary(targetSelector, payload) {
     const view = flags.buildHighlightedTagsHtml(payload);
     const ratings = Object.entries(view.flaggedRatings).map(([name, score]) => `${name}: ${score}`).join(", ");
+    const flaggedLabel = view.flaggedTagPairs
+      .map((entry) => entry.display === entry.original ? entry.display : `${entry.display} (${entry.original})`)
+      .join(", ");
     if (!view.flaggedTags.length && !ratings) {
       $(targetSelector).innerHTML = emptyCard("暂无风险提示", "没有命中明显的不合适标签。");
       return view;
     }
     $(targetSelector).innerHTML = `
       <div class="flag-grid">
-        ${view.flaggedTags.length ? `<article class="flag-card"><h4>不合适标签</h4><strong>${flags.escapeHtml(view.flaggedTags.join(", "))}</strong></article>` : ""}
+        ${view.flaggedTagPairs.length ? `<article class="flag-card"><h4>不合适标签</h4><strong>${flags.escapeHtml(flaggedLabel)}</strong></article>` : ""}
         ${ratings ? `<article class="flag-card"><h4>评分提示</h4><strong>${flags.escapeHtml(ratings)}</strong></article>` : ""}
       </div>
     `;
     return view;
   }
 
-  function renderSingleResult(payload) {
-    const view = renderFlagSummary("#singleFlagArea", payload);
+  function renderSingleResult(payload, headers = null) {
+    const displayPayload = Array.isArray(payload) || typeof payload === "string"
+      ? {
+        caption_display: resultTextFromPayload(payload),
+        caption: resultTextFromPayload(payload),
+        risk: headers?.riskSummary || null,
+      }
+      : payload && typeof payload === "object"
+      ? payload
+      : {
+        caption_display: resultTextFromPayload(payload),
+        caption: resultTextFromPayload(payload),
+        risk: headers?.riskSummary || null,
+      };
+    const view = renderFlagSummary("#singleFlagArea", displayPayload);
     const text = resultTextFromPayload(payload);
+    const payloadCache = payload && typeof payload === "object" ? (payload.cache || {}) : {};
+    const cacheHit = payloadCache.cache_hit || headers?.cacheHit || "-";
+    const cacheSimilarity = payloadCache.similarity_score ?? headers?.cacheSimilarity ?? "-";
+    const cacheCards = [
+      ["缓存命中", cacheHit],
+      ["相似度", cacheSimilarity],
+    ];
     $("#singleResultArea").innerHTML = `
-      <div class="summary-card">
-        <h4>标签输出</h4>
-        <strong>${flags.escapeHtml(text)}</strong>
-        ${view.html}
+      <div class="grid-stack">
+        <div class="summary-card">
+          <h4>标签输出</h4>
+          <strong>${flags.escapeHtml(text)}</strong>
+          ${view.html}
+        </div>
+        <div class="metric-grid">${cacheCards.map(([title, value]) => `<article class="metric-card"><h4>${flags.escapeHtml(title)}</h4><strong>${flags.escapeHtml(String(value))}</strong></article>`).join("")}</div>
       </div>
     `;
   }
@@ -323,7 +440,10 @@
         const view = flags.buildHighlightedTagsHtml(item);
         if (!view.flaggedTags.length && !Object.keys(view.flaggedRatings).length) return "";
         const ratings = Object.entries(view.flaggedRatings).map(([k, v]) => `${k}: ${v}`).join(", ");
-        return `<article class="flag-card"><h4>${flags.escapeHtml(item.filename || "image")}</h4><strong>${flags.escapeHtml(view.flaggedTags.join(", ") || ratings || "命中")}</strong></article>`;
+        const flaggedLabel = view.flaggedTagPairs
+          .map((entry) => entry.display === entry.original ? entry.display : `${entry.display} (${entry.original})`)
+          .join(", ");
+        return `<article class="flag-card"><h4>${flags.escapeHtml(item.filename || "image")}</h4><strong>${flags.escapeHtml(flaggedLabel || ratings || "命中")}</strong></article>`;
       })
       .filter(Boolean)
       .join("");
@@ -396,6 +516,7 @@
   function appendCommonOptions(form, settings, prefix) {
     form.append("general_threshold", String(settings[`${prefix}General`]));
     form.append("character_threshold", String(settings[`${prefix}Character`]));
+    form.append("sensitive_threshold", String(settings[`${prefix}Sensitive`]));
     form.append("general_mcut", String(settings[`${prefix}GeneralMcut`]));
     form.append("character_mcut", String(settings[`${prefix}CharacterMcut`]));
     form.append("lang", settings.translationMode || "zh");
@@ -406,24 +527,12 @@
     }
   }
 
-  function appendSingleSource(form, settings) {
-    if (settings.singleSource === "singleUrl") {
-      const url = $("#singleUrlInput").value.trim();
-      if (!url) throw new Error("请先填写图片 URL");
-      form.append("image_url", url);
-      return;
-    }
-    const file = $("#singleFile").files[0];
-    if (!file) throw new Error("请先选择图片");
-    form.append("image", file, file.name);
-  }
-
-  async function requestSingleTaggedImage(settings) {
+  async function requestSingleTaggedImage(requestSnapshot) {
     $("#singleDownloadArea").innerHTML = emptyCard("正在生成导出图片", "正在把标签写入图片元数据。");
     const form = new FormData();
     form.append("type", "tagimg");
-    appendCommonOptions(form, settings, "single");
-    appendSingleSource(form, settings);
+    appendCommonOptions(form, requestSnapshot.settings, "single");
+    appendSingleSource(form, requestSnapshot.source);
 
     const response = await fetch("/process", { method: "POST", body: form, credentials: "same-origin" });
     const headers = parseHeaders(response);
@@ -444,6 +553,9 @@
     const settings = collectSettings();
     saveSettings(settings);
     clearDownloads("single");
+    renderSingleExportState({ enabled: false, hint: "当前请求处理中，识别完成后可按需生成导出图片。" });
+    state.lastSingleRequest = null;
+    state.lastSingleTiming = null;
     $("#singleResultArea").innerHTML = emptyCard("处理中", "正在上传并等待后端推理结果。");
     $("#singleFlagArea").innerHTML = emptyCard("暂无风险提示", "执行后这里会显示不合适标签和评分。");
     $("#singleTimingArea").innerHTML = "";
@@ -451,10 +563,11 @@
     setBusy(true);
     const start = performance.now();
     try {
+      const sourceSnapshot = buildSingleSourceSnapshot(settings);
       const form = new FormData();
       form.append("type", settings.singleType);
       appendCommonOptions(form, settings, "single");
-      appendSingleSource(form, settings);
+      appendSingleSource(form, sourceSnapshot);
 
       const response = await fetch("/process", { method: "POST", body: form, credentials: "same-origin" });
       const headers = parseHeaders(response);
@@ -463,10 +576,10 @@
 
       if (contentType.includes("application/json")) {
         const payload = await response.json();
-        renderSingleResult(payload);
+        renderSingleResult(payload, headers);
       } else if (contentType.startsWith("text/plain")) {
         const text = await response.text();
-        renderSingleResult(text);
+        renderSingleResult(text, headers);
       } else {
         const blob = await response.blob();
         const filename = extractFilename(headers.disposition, "tagged_image.bin");
@@ -474,18 +587,59 @@
         $("#singleResultArea").innerHTML = `<div class="summary-card"><h4>文件已生成</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
         $("#singleFlagArea").innerHTML = emptyCard("导出图像", "tagimg 模式由后端导出图片文件。");
       }
+      const requestElapsedMs = Math.round(performance.now() - start);
+      rememberSingleTiming(headers, requestElapsedMs);
       if (settings.singleType !== "tagimg") {
-        try {
-          await requestSingleTaggedImage(settings);
-        } catch (exportError) {
-          $("#singleDownloadArea").innerHTML = `<div class="flag-card"><h4>导出失败</h4><strong>${flags.escapeHtml(exportError instanceof Error ? exportError.message : String(exportError))}</strong></div>`;
-        }
+        state.lastSingleRequest = {
+          settings: { ...settings },
+          source: sourceSnapshot,
+        };
+        renderSingleExportState({ enabled: true });
+      } else {
+        renderSingleExportState({
+          enabled: true,
+          hint: "当前结果已经是带 metadata 的图片；如需重新生成可再次点击。",
+        });
+        state.lastSingleRequest = {
+          settings: { ...settings, singleType: "tagimg" },
+          source: sourceSnapshot,
+        };
       }
-      renderTiming("#singleTimingArea", headers, { totalElapsedMs: Math.round(performance.now() - start) });
       openResults("single");
     } catch (error) {
+      state.lastSingleRequest = null;
+      state.lastSingleTiming = null;
+      renderSingleExportState({ enabled: false, hint: "识别失败，暂时不能生成导出图片。" });
       $("#singleResultArea").innerHTML = `<div class="flag-card"><h4>错误</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
       openResults("single");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSingleExport() {
+    if (!state.lastSingleRequest) {
+      renderSingleExportState({ enabled: false, hint: "没有可复用的单张结果；请先重新识别。" });
+      return;
+    }
+    openResults("single");
+    setBusy(true);
+    renderSingleExportState({ enabled: true, busy: true });
+    const exportStarted = performance.now();
+    try {
+      const { headers } = await requestSingleTaggedImage(state.lastSingleRequest);
+      const exportElapsedMs = Math.round(performance.now() - exportStarted);
+      updateSingleTimingAfterExport(headers, exportElapsedMs);
+      renderSingleExportState({
+        enabled: true,
+        hint: "导出完成；这次附加耗时已经单独计入，不再混进首个识别请求。",
+      });
+    } catch (error) {
+      renderSingleExportState({
+        enabled: true,
+        hint: "导出失败了；可以重试，识别结果仍然保留。",
+      });
+      $("#singleDownloadArea").innerHTML = `<div class="flag-card"><h4>导出失败</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
     } finally {
       setBusy(false);
     }
@@ -546,7 +700,11 @@
         $("#batchResultArea").innerHTML = `<div class="summary-card"><h4>批量导出</h4><strong>${flags.escapeHtml(filename)}</strong></div>`;
         $("#batchFlagArea").innerHTML = emptyCard("导出结果", "文件结果由后端直接返回。");
       }
-      renderTiming("#batchTimingArea", headers, { totalElapsedMs: Math.round(performance.now() - start) });
+      const requestElapsedMs = Math.round(performance.now() - start);
+      renderTiming("#batchTimingArea", headers, {
+        requestElapsedMs,
+        endToEndElapsedMs: requestElapsedMs,
+      });
       openResults("batch");
     } catch (error) {
       $("#batchResultArea").innerHTML = `<div class="flag-card"><h4>错误</h4><strong>${flags.escapeHtml(error instanceof Error ? error.message : String(error))}</strong></div>`;
@@ -574,7 +732,12 @@
       });
     });
     $$(".source-tab").forEach((button) => {
-      button.addEventListener("click", () => activateScopedTab(".source-tab", ".source-pane", button));
+      button.addEventListener("click", () => {
+        activateScopedTab(".source-tab", ".source-pane", button);
+        if (button.closest("#singlePane")) {
+          invalidateSingleRequest();
+        }
+      });
     });
     $$(".result-tab").forEach((button) => {
       button.addEventListener("click", () => activateScopedTab(".result-tab", ".result-pane", button));
@@ -594,16 +757,22 @@
     return multiple ? files : files.slice(0, 1);
   }
 
+  function revokeSinglePreviewUrl() {
+    if (state.singlePreviewUrl) {
+      URL.revokeObjectURL(state.singlePreviewUrl);
+      state.singlePreviewUrl = null;
+    }
+  }
+
   function updateSinglePreview() {
     const file = $("#singleFile").files[0];
+    revokeSinglePreviewUrl();
     $("#singlePreview").textContent = file ? `${file.name} (${Math.round(file.size / 1024)} KB)` : "尚未选择图片";
     if (file) {
+      invalidateSingleRequest();
       $("#singlePreview").classList.remove("muted");
-      const reader = new FileReader();
-      reader.onload = () => {
-        $("#singlePreview").innerHTML = `<img src="${reader.result}" alt="preview" /><div class="preview-meta"><strong>${flags.escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span></div>`;
-      };
-      reader.readAsDataURL(file);
+      state.singlePreviewUrl = URL.createObjectURL(file);
+      $("#singlePreview").innerHTML = `<img src="${state.singlePreviewUrl}" alt="preview" /><div class="preview-meta"><strong>${flags.escapeHtml(file.name)}</strong><span>${Math.round(file.size / 1024)} KB</span></div>`;
     } else {
       clearSingleFile();
     }
@@ -686,6 +855,8 @@
     $("#singleClear").addEventListener("click", clearSingleFile);
     $("#batchClear").addEventListener("click", clearBatchFiles);
     $("#singleFile").addEventListener("change", updateSinglePreview);
+    $("#singleUrlInput").addEventListener("input", () => invalidateSingleRequest());
+    $("#singleExportGenerate").addEventListener("click", handleSingleExport);
     $("#batchFilesInput").addEventListener("change", updateBatchFileList);
     $("#backToTop").addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
   }
@@ -693,6 +864,8 @@
   function clearSingleFile() {
     const input = $("#singleFile");
     if (input) input.value = "";
+    revokeSinglePreviewUrl();
+    invalidateSingleRequest("已清空当前图片；如需导出，请重新选择并识别。");
     $("#singlePreview").classList.add("muted");
     $("#singlePreview").innerHTML = "尚未选择图片";
   }
@@ -715,6 +888,7 @@
     $("#batchSubmit").addEventListener("click", submitBatch);
     clearDownloads("single");
     clearDownloads("batch");
+    renderSingleExportState({ enabled: false });
     $("#singleFlagArea").innerHTML = emptyCard("暂无风险提示", "执行后这里会显示不合适标签和评分。");
     $("#batchFlagArea").innerHTML = emptyCard("暂无风险摘要", "批量处理后这里会汇总命中风险标签的文件。");
     $("#singleTimingArea").innerHTML = emptyCard("暂无耗时数据", "请求完成后这里会显示前端和后端耗时。");

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import mimetypes
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from time import perf_counter, process_time
 from typing import Literal
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
-import mimetypes
 import re
-
-from PIL import Image
 
 from wd_tagger.service import (
     DEFAULT_BATCH_ARCHIVE_TEMPLATE,
@@ -34,6 +32,8 @@ class ProcessResult:
     body: str | bytes | dict | list
     filename: str | None = None
     metrics: dict | None = None
+    cache: dict | None = None
+    risk: dict | None = None
 
 
 def normalize_type(value: str) -> str:
@@ -52,15 +52,13 @@ def load_sources_from_dir(input_dir: str | Path) -> list[ImageSource]:
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
             continue
         source_bytes = path.read_bytes()
-        with Image.open(path) as image_file:
-            image = image_file.convert("RGBA")
         sources.append(
-            ImageSource(
+            ImageSource.from_bytes(
                 filename=path.name,
-                image=image,
                 content_type=f"image/{path.suffix.lower().lstrip('.')}",
                 source_path=str(path),
                 source_bytes=source_bytes,
+                source_md5=hashlib.md5(source_bytes).hexdigest(),
             )
         )
     return sources
@@ -104,13 +102,12 @@ def load_source_from_url(url: str, index: int = 1) -> ImageSource:
     if not content_type.lower().startswith("image/"):
         guessed_type, _ = mimetypes.guess_type(url)
         content_type = guessed_type or content_type
-    image = Image.open(BytesIO(source_bytes)).convert("RGBA")
-    return ImageSource(
+    return ImageSource.from_bytes(
         filename=_filename_from_url(url, content_type, index),
-        image=image,
         content_type=content_type,
         source_path=url,
         source_bytes=source_bytes,
+        source_md5=hashlib.md5(source_bytes).hexdigest(),
     )
 
 
@@ -153,6 +150,8 @@ def process_single_type(
             media_type="text/plain; charset=utf-8",
             body=payload["caption"],
             metrics=metrics,
+            cache=payload.get("cache"),
+            risk=payload.get("risk"),
         )
     if normalized == "arrary":
         metrics = dict(payload.get("metrics", {}))
@@ -168,6 +167,8 @@ def process_single_type(
             media_type="application/json",
             body=service.extract_tag_array(payload),
             metrics=metrics,
+            cache=payload.get("cache"),
+            risk=payload.get("risk"),
         )
     if normalized == "tagimg":
         output_dir = service.create_request_dir("tagimg")
@@ -186,8 +187,17 @@ def process_single_type(
             body=tagged_path.read_bytes(),
             filename=tagged_path.name,
             metrics=metrics,
+            cache=payload.get("cache"),
+            risk=payload.get("risk"),
         )
-    return ProcessResult(type="json", media_type="application/json", body=payload, metrics=payload.get("metrics"))
+    return ProcessResult(
+        type="json",
+        media_type="application/json",
+        body=payload,
+        metrics=payload.get("metrics"),
+        cache=payload.get("cache"),
+        risk=payload.get("risk"),
+    )
 
 
 def process_batch_type(

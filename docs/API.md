@@ -70,6 +70,10 @@ JSON 响应里会保留：
 - `translation.lang`：请求/默认选择的输出语言
 - `translation.source`：中文输出使用的对照表路径
 
+- `risk.flagged_tags_original`：后端按原文判定命中的风险标签
+- `risk.flagged_tags`：对应的当前展示标签
+- `risk.flagged_tag_pairs`：每个风险标签的 `{original, display}` 对照
+- `risk.sensitive_threshold`：当前敏感评分阈值
 ## Legacy Endpoints
 
 ### Single image JSON
@@ -83,6 +87,7 @@ Form fields:
 - `image`
 - `general_threshold`
 - `character_threshold`
+- `sensitive_threshold`
 - `general_mcut`
 - `character_mcut`
 - `lang`
@@ -98,6 +103,7 @@ Form fields:
 - `images`
 - `general_threshold`
 - `character_threshold`
+- `sensitive_threshold`
 - `general_mcut`
 - `character_mcut`
 - `lang`
@@ -114,6 +120,11 @@ This endpoint accepts the image as the raw request body, including chunked trans
 Optional query parameters:
 
 - `lang`: optional output language, `zh` or `en`
+- `general_threshold`
+- `character_threshold`
+- `sensitive_threshold`
+- `general_mcut`
+- `character_mcut`
 
 Example:
 
@@ -136,6 +147,11 @@ This endpoint accepts a zip archive as the raw request body. Supported image ent
 Optional query parameters:
 
 - `lang`: optional output language, `zh` or `en`
+- `general_threshold`
+- `character_threshold`
+- `sensitive_threshold`
+- `general_mcut`
+- `character_mcut`
 
 Example:
 
@@ -156,12 +172,16 @@ All processing endpoints also return timing headers:
 
 - `X-WD-Backend-Process-Time-Ms`: model-side processing time on the backend
 - `X-WD-Backend-Total-Time-Ms`: backend total request time, including image decode/load and processing
+- `X-WD-Backend-Prepare-Time-Ms`: request/body/image preparation time before model processing
+- `X-WD-Backend-Post-Inference-Time-Ms`: post-inference processing time on the backend
+- `X-WD-Risk-Summary`: JSON-encoded risk summary, including original/display tag pairs
 
 Shared form fields:
 
 - `type`
 - `general_threshold`
 - `character_threshold`
+- `sensitive_threshold`
 - `general_mcut`
 - `character_mcut`
 - `lang`
@@ -195,6 +215,7 @@ Supported query parameters:
 - `lang`: optional output language, `zh` or `en`
 - `general_threshold`
 - `character_threshold`
+- `sensitive_threshold`
 - `general_mcut`
 - `character_mcut`
 - `output_filename_template`
@@ -358,6 +379,10 @@ Batch JSON items include cache metadata:
 - `cache.cache_hit`: `miss` / `exact` / `similar`
 - `cache.source_md5`
 - `cache.similarity_score`
+- `risk.flagged_tags_original`: matched original tags used by backend risk detection
+- `risk.flagged_tags`: current display labels for those matched tags
+- `risk.flagged_tag_pairs`: original/display pairs returned together
+- `risk.sensitive_threshold`: threshold used for flagged rating detection
 
 Batch summary also includes:
 

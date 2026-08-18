@@ -624,6 +624,13 @@ code {
   line-height: 1.55;
 }
 
+.export-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .timing-grid,
 .metric-grid,
 .flag-grid {

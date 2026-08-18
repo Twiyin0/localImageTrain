@@ -228,6 +228,9 @@
     if (!payload || typeof payload !== "object") {
       return {};
     }
+    if (payload.risk && typeof payload.risk === "object" && payload.risk.flagged_ratings && typeof payload.risk.flagged_ratings === "object") {
+      return payload.risk.flagged_ratings;
+    }
     const rating = payload.rating;
     if (!rating || typeof rating !== "object") {
       return {};
@@ -269,7 +272,20 @@
   function buildHighlightedTagsHtml(payload) {
     const entries = extractTagEntries(payload);
     const flaggedRatings = extractFlaggedRatings(payload);
-    const flaggedEntries = entries.map((entry) => isUnsuitableTag(entry.original) || isUnsuitableTag(entry.display));
+    const riskPairs = payload && typeof payload === "object" && payload.risk && typeof payload.risk === "object" && Array.isArray(payload.risk.flagged_tag_pairs)
+      ? payload.risk.flagged_tag_pairs
+      : null;
+    const flaggedOriginalSet = riskPairs
+      ? new Set(riskPairs.map((entry) => normalizeTag(entry.original)))
+      : null;
+    const flaggedDisplaySet = riskPairs
+      ? new Set(riskPairs.map((entry) => normalizeTag(entry.display || entry.original)))
+      : null;
+    const flaggedEntries = entries.map((entry) => (
+      flaggedOriginalSet
+        ? flaggedOriginalSet.has(normalizeTag(entry.original)) || flaggedDisplaySet.has(normalizeTag(entry.display))
+        : isUnsuitableTag(entry.original) || isUnsuitableTag(entry.display)
+    ));
     const chips = entries.map((entry, index) => {
       const isFlagged = flaggedEntries[index];
       return `<span class="tag-chip ${isFlagged ? "flagged" : ""}" title="${escapeHtml(entry.original)}">${escapeHtml(entry.display)}</span>`;
@@ -280,6 +296,11 @@
     return {
       tags: entries.map((entry) => entry.display),
       originalTags: entries.map((entry) => entry.original),
+      flaggedTagPairs: riskPairs
+        ? riskPairs.map((entry) => ({ original: String(entry.original || ""), display: String(entry.display || entry.original || "") }))
+        : entries
+          .filter((entry, index) => flaggedEntries[index])
+          .map((entry) => ({ original: entry.original, display: entry.display })),
       flaggedTags: entries
         .filter((entry, index) => flaggedEntries[index])
         .map((entry) => entry.display),

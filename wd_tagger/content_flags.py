@@ -165,6 +165,7 @@ UNSUITABLE_SUBSTRINGS = (
 )
 
 FLAGGED_RATINGS = ("sensitive", "questionable", "explicit")
+DEFAULT_SENSITIVE_THRESHOLD = 0.7
 
 
 def normalize_tag(tag: str) -> str:
@@ -175,23 +176,58 @@ def split_caption_tags(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def extract_tags(payload: dict[str, Any] | list[Any] | str | None) -> list[str]:
+def extract_tag_entries(payload: dict[str, Any] | list[Any] | str | None) -> list[dict[str, str]]:
     if isinstance(payload, dict):
+        caption_display = payload.get("caption_display")
+        caption_original = payload.get("caption_original")
+        if isinstance(caption_display, str) and caption_display.strip():
+            display_tags = split_caption_tags(caption_display)
+            original_tags = split_caption_tags(caption_original) if isinstance(caption_original, str) else display_tags
+            return [
+                {
+                    "original": str(original_tags[index] if index < len(original_tags) else tag),
+                    "display": str(tag),
+                }
+                for index, tag in enumerate(display_tags)
+            ]
         general = payload.get("general")
         if isinstance(general, dict):
-            return [str(tag) for tag in general.keys()]
+            original_tags = [str(tag) for tag in general.keys()]
+            general_display = payload.get("general_display")
+            if isinstance(general_display, dict):
+                display_tags = [str(tag) for tag in general_display.keys()]
+            else:
+                display_tags = original_tags
+            return [
+                {
+                    "original": tag,
+                    "display": str(display_tags[index] if index < len(display_tags) else tag),
+                }
+                for index, tag in enumerate(original_tags)
+            ]
         caption = payload.get("caption")
         if isinstance(caption, str):
-            return split_caption_tags(caption)
+            return [{"original": tag, "display": tag} for tag in split_caption_tags(caption)]
         return []
     if isinstance(payload, list):
-        return [str(item).strip() for item in payload if str(item).strip()]
+        return [
+            {"original": str(item).strip(), "display": str(item).strip()}
+            for item in payload
+            if str(item).strip()
+        ]
     if isinstance(payload, str):
-        return split_caption_tags(payload)
+        return [{"original": tag, "display": tag} for tag in split_caption_tags(payload)]
     return []
 
 
-def extract_flagged_ratings(payload: dict[str, Any] | None, threshold: float = 0.2) -> dict[str, float]:
+def extract_tags(payload: dict[str, Any] | list[Any] | str | None) -> list[str]:
+    return [str(entry.get("original", "")).strip() for entry in extract_tag_entries(payload) if str(entry.get("original", "")).strip()]
+
+
+def extract_flagged_ratings(
+    payload: dict[str, Any] | None,
+    threshold: float = DEFAULT_SENSITIVE_THRESHOLD,
+) -> dict[str, float]:
     if not isinstance(payload, dict):
         return {}
     ratings = payload.get("rating")
@@ -213,6 +249,38 @@ def extract_unsuitable_tags(tags: list[str]) -> list[str]:
         if normalized in UNSUITABLE_EXACT_TAGS or any(fragment in normalized for fragment in UNSUITABLE_SUBSTRINGS):
             flagged.append(tag)
     return flagged
+
+
+def summarize_risk(
+    payload: dict[str, Any] | list[Any] | str | None,
+    *,
+    sensitive_threshold: float = DEFAULT_SENSITIVE_THRESHOLD,
+) -> dict[str, Any]:
+    entries = extract_tag_entries(payload)
+    original_tags = [str(entry.get("original", "")) for entry in entries if str(entry.get("original", "")).strip()]
+    unsuitable_original_tags = extract_unsuitable_tags(original_tags)
+    unsuitable_set = {normalize_tag(tag) for tag in unsuitable_original_tags}
+    flagged_pairs = [
+        {
+            "original": str(entry.get("original", "")),
+            "display": str(entry.get("display", entry.get("original", ""))),
+        }
+        for entry in entries
+        if normalize_tag(str(entry.get("original", ""))) in unsuitable_set
+    ]
+    flagged_ratings = extract_flagged_ratings(
+        payload if isinstance(payload, dict) else None,
+        threshold=sensitive_threshold,
+    )
+    return {
+        "flagged_tags": [pair["display"] for pair in flagged_pairs],
+        "flagged_tags_original": [pair["original"] for pair in flagged_pairs],
+        "flagged_tag_pairs": flagged_pairs,
+        "flagged_tag_count": len(flagged_pairs),
+        "flagged_ratings": flagged_ratings,
+        "sensitive_threshold": round(float(sensitive_threshold), 4),
+        "has_inappropriate_content": bool(flagged_pairs or flagged_ratings),
+    }
 
 
 def build_highlighted_tags_html(tags: list[str], unsuitable_tags: list[str]) -> str:
@@ -240,13 +308,7 @@ def build_highlighted_tags_html(tags: list[str], unsuitable_tags: list[str]) -> 
 
 
 def build_flagged_summary(payload: dict[str, Any] | list[Any] | str | None) -> tuple[str, dict[str, Any]]:
-    tags = extract_tags(payload)
-    unsuitable_tags = extract_unsuitable_tags(tags)
-    flagged_ratings = extract_flagged_ratings(payload if isinstance(payload, dict) else None)
-    summary = {
-        "flagged_tags": unsuitable_tags,
-        "flagged_tag_count": len(unsuitable_tags),
-        "flagged_ratings": flagged_ratings,
-        "has_inappropriate_content": bool(unsuitable_tags or flagged_ratings),
-    }
-    return build_highlighted_tags_html(tags, unsuitable_tags), summary
+    entries = extract_tag_entries(payload)
+    display_tags = [str(entry.get("display", "")) for entry in entries if str(entry.get("display", "")).strip()]
+    summary = summarize_risk(payload)
+    return build_highlighted_tags_html(display_tags, list(summary.get("flagged_tags", []))), summary

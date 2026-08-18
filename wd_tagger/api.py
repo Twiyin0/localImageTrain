@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import mimetypes
 import os
 import sys
@@ -25,6 +27,7 @@ from wd_tagger.config import (
     find_local_model_dir,
     get_default_onnx_providers,
 )
+from wd_tagger.content_flags import DEFAULT_SENSITIVE_THRESHOLD
 from wd_tagger.modes import (
     ProcessResult,
     load_sources_from_dir,
@@ -122,6 +125,20 @@ async def read_request_stream_bytes(request: Request) -> bytes:
     return content
 
 
+async def read_request_stream_payload(request: Request) -> tuple[bytes, str]:
+    chunks = bytearray()
+    digest = hashlib.md5()
+    async for chunk in request.stream():
+        if not chunk:
+            continue
+        chunks.extend(chunk)
+        digest.update(chunk)
+    content = bytes(chunks)
+    if not content:
+        raise HTTPException(status_code=400, detail="Request body is empty")
+    return content, digest.hexdigest()
+
+
 async def read_upload_bytes(image: UploadFile) -> bytes:
     chunks = bytearray()
     while True:
@@ -132,14 +149,26 @@ async def read_upload_bytes(image: UploadFile) -> bytes:
     return bytes(chunks)
 
 
+async def read_upload_payload(image: UploadFile) -> tuple[bytes, str]:
+    chunks = bytearray()
+    digest = hashlib.md5()
+    while True:
+        chunk = await image.read(STREAM_CHUNK_SIZE)
+        if not chunk:
+            break
+        chunks.extend(chunk)
+        digest.update(chunk)
+    return bytes(chunks), digest.hexdigest()
+
+
 async def read_upload_image(image: UploadFile) -> ImageSource:
     content_type = normalize_image_content_type(image.content_type, image.filename)
-    content = await read_upload_bytes(image)
-    return ImageSource(
+    content, content_md5 = await read_upload_payload(image)
+    return ImageSource.from_bytes(
         filename=image.filename or "image.png",
-        image=decode_image(content),
         content_type=content_type,
         source_bytes=content,
+        source_md5=content_md5,
     )
 
 
@@ -150,12 +179,12 @@ async def read_stream_image(
     content_type: str | None,
 ) -> ImageSource:
     normalized_type = normalize_image_content_type(content_type or request.headers.get("content-type"), filename)
-    content = await read_request_stream_bytes(request)
-    return ImageSource(
+    content, content_md5 = await read_request_stream_payload(request)
+    return ImageSource.from_bytes(
         filename=filename or "stream_image.png",
-        image=decode_image(content),
         content_type=normalized_type,
         source_bytes=content,
+        source_md5=content_md5,
     )
 
 
@@ -188,11 +217,11 @@ async def read_stream_zip_sources(
                 guessed_type = normalize_image_content_type(None, entry_name)
                 source_bytes = archive.read(info)
                 sources.append(
-                    ImageSource(
+                    ImageSource.from_bytes(
                         filename=entry_name,
-                        image=decode_image(source_bytes),
                         content_type=guessed_type,
                         source_bytes=source_bytes,
+                        source_md5=hashlib.md5(source_bytes).hexdigest(),
                     )
                 )
     except HTTPException:
@@ -203,6 +232,19 @@ async def read_stream_zip_sources(
     if not sources:
         raise HTTPException(status_code=400, detail="zip stream does not contain supported image files")
     return sources
+
+
+def close_image_source(source: ImageSource | None) -> None:
+    if source is None:
+        return
+    source.close()
+
+
+def close_image_sources(sources: list[ImageSource] | None) -> None:
+    if not sources:
+        return
+    for source in sources:
+        source.close()
 
 
 MODEL_REPO = os.getenv("WD_TAGGER_REPO_ID", DEFAULT_ONNX_REPO)
@@ -286,21 +328,54 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def capture_request_started_at(request: Request, call_next):
+    request.state.request_started_at = perf_counter()
+    return await call_next(request)
+
+
+def get_request_started_at(request: Request | None) -> float:
+    started_at = getattr(getattr(request, "state", None), "request_started_at", None)
+    if isinstance(started_at, (int, float)):
+        return float(started_at)
+    return perf_counter()
+
+
 def build_timing_headers(process_ms: float, backend_total_ms: float) -> dict[str, str]:
+    prepare_ms = max(backend_total_ms - process_ms, 0.0)
     return {
         "X-WD-Backend-Process-Time-Ms": f"{process_ms:.2f}",
         "X-WD-Backend-Total-Time-Ms": f"{backend_total_ms:.2f}",
+        "X-WD-Backend-Prepare-Time-Ms": f"{prepare_ms:.2f}",
     }
 
 
 def build_response(result: ProcessResult, *, process_ms: float, backend_total_ms: float) -> Response:
     headers = build_timing_headers(process_ms, backend_total_ms)
     metrics = result.metrics if isinstance(result.metrics, dict) else None
+    cache = result.cache if isinstance(result.cache, dict) else None
+    risk = result.risk if isinstance(result.risk, dict) else None
     if metrics is not None:
+        inference_ms = metrics.get("inference_elapsed_ms")
+        cpu_elapsed_ms = metrics.get("cpu_elapsed_ms")
+        if inference_ms is not None:
+            headers["X-WD-Inference-Time-Ms"] = str(inference_ms)
+            headers["X-WD-Backend-Post-Inference-Time-Ms"] = f"{max(process_ms - float(inference_ms), 0.0):.2f}"
+        if cpu_elapsed_ms is not None:
+            headers["X-WD-Cpu-Elapsed-Ms"] = str(cpu_elapsed_ms)
         headers["X-WD-Process-Current-Rss-Mb"] = str(metrics.get("process_current_rss_mb"))
         headers["X-WD-Process-Peak-Rss-Mb"] = str(metrics.get("process_peak_rss_mb"))
         headers["X-WD-Process-Cpu-User-Time-S"] = str(metrics.get("cpu_user_time_s"))
         headers["X-WD-Process-Cpu-System-Time-S"] = str(metrics.get("cpu_system_time_s"))
+    if cache is not None:
+        cache_hit = cache.get("cache_hit")
+        similarity_score = cache.get("similarity_score")
+        if cache_hit is not None:
+            headers["X-WD-Cache-Hit"] = str(cache_hit)
+        if similarity_score is not None:
+            headers["X-WD-Cache-Similarity-Score"] = str(similarity_score)
+    if risk is not None:
+        headers["X-WD-Risk-Summary"] = json.dumps(risk, ensure_ascii=True, separators=(",", ":"))
     if result.type == "tag":
         return PlainTextResponse(str(result.body), headers=headers)
     if isinstance(result.body, dict):
@@ -317,6 +392,7 @@ def build_response(result: ProcessResult, *, process_ms: float, backend_total_ms
 def build_options(
     general_threshold: float,
     character_threshold: float,
+    sensitive_threshold: float,
     general_mcut: bool,
     character_mcut: bool,
     lang: Literal["zh", "en"] | None = None,
@@ -330,6 +406,7 @@ def build_options(
         model_dir=selected_model_dir,
         general_threshold=general_threshold,
         character_threshold=character_threshold,
+        sensitive_threshold=sensitive_threshold,
         general_mcut=general_mcut,
         character_mcut=character_mcut,
         lang=lang,
@@ -404,9 +481,11 @@ def models(_: str = Security(require_api_key)) -> dict:
 
 @app.post("/tag", summary="Tag Image")
 async def tag_image(
+    request: Request,
     image: UploadFile = File(..., description="Image file to analyze"),
     general_threshold: float = Form(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
+    sensitive_threshold: float = Form(DEFAULT_SENSITIVE_THRESHOLD),
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
@@ -415,28 +494,32 @@ async def tag_image(
     repo_id: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
-    request_started = perf_counter()
+    request_started = get_request_started_at(request)
     source = await read_upload_image(image)
-    process_started = perf_counter()
-    payload = SERVICE.predict_from_source(
-        source=source,
-        options=build_options(
-            general_threshold,
-            character_threshold,
-            general_mcut,
-            character_mcut,
-            lang,
-            translation_mode,
-            model_dir,
-            repo_id,
-        ),
-        providers=PROVIDERS,
-    )
-    process_ms = (perf_counter() - process_started) * 1000
-    backend_total_ms = (perf_counter() - request_started) * 1000
-    payload["filename"] = source.filename
-    payload["content_type"] = source.content_type
-    return JSONResponse(payload, headers=build_timing_headers(process_ms, backend_total_ms))
+    try:
+        process_started = perf_counter()
+        payload = SERVICE.predict_from_source(
+            source=source,
+            options=build_options(
+                general_threshold,
+                character_threshold,
+                sensitive_threshold,
+                general_mcut,
+                character_mcut,
+                lang,
+                translation_mode,
+                model_dir,
+                repo_id,
+            ),
+            providers=PROVIDERS,
+        )
+        process_ms = (perf_counter() - process_started) * 1000
+        backend_total_ms = (perf_counter() - request_started) * 1000
+        payload["filename"] = source.filename
+        payload["content_type"] = source.content_type
+        return JSONResponse(payload, headers=build_timing_headers(process_ms, backend_total_ms))
+    finally:
+        close_image_source(source)
 
 
 @app.post("/tag/stream", summary="Tag Image From Raw Stream")
@@ -445,6 +528,7 @@ async def tag_image_stream(
     filename: str | None = Query(None, description="Original filename, used for type inference and response metadata"),
     general_threshold: float = Query(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Query(DEFAULT_CHARACTER_THRESHOLD),
+    sensitive_threshold: float = Query(DEFAULT_SENSITIVE_THRESHOLD),
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
@@ -454,35 +538,41 @@ async def tag_image_stream(
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
-    request_started = perf_counter()
+    request_started = get_request_started_at(request)
     source = await read_stream_image(request, filename=filename, content_type=content_type)
-    process_started = perf_counter()
-    payload = SERVICE.predict_from_source(
-        source=source,
-        options=build_options(
-            general_threshold,
-            character_threshold,
-            general_mcut,
-            character_mcut,
-            lang,
-            translation_mode,
-            model_dir,
-            repo_id,
-        ),
-        providers=PROVIDERS,
-    )
-    process_ms = (perf_counter() - process_started) * 1000
-    backend_total_ms = (perf_counter() - request_started) * 1000
-    payload["filename"] = source.filename
-    payload["content_type"] = source.content_type
-    return JSONResponse(payload, headers=build_timing_headers(process_ms, backend_total_ms))
+    try:
+        process_started = perf_counter()
+        payload = SERVICE.predict_from_source(
+            source=source,
+            options=build_options(
+                general_threshold,
+                character_threshold,
+                sensitive_threshold,
+                general_mcut,
+                character_mcut,
+                lang,
+                translation_mode,
+                model_dir,
+                repo_id,
+            ),
+            providers=PROVIDERS,
+        )
+        process_ms = (perf_counter() - process_started) * 1000
+        backend_total_ms = (perf_counter() - request_started) * 1000
+        payload["filename"] = source.filename
+        payload["content_type"] = source.content_type
+        return JSONResponse(payload, headers=build_timing_headers(process_ms, backend_total_ms))
+    finally:
+        close_image_source(source)
 
 
 @app.post("/tag/batch", summary="Tag Images In Batch")
 async def tag_images_batch(
+    request: Request,
     images: list[UploadFile] = File(..., description="Multiple image files to analyze"),
     general_threshold: float = Form(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
+    sensitive_threshold: float = Form(DEFAULT_SENSITIVE_THRESHOLD),
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
@@ -491,36 +581,40 @@ async def tag_images_batch(
     repo_id: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
-    request_started = perf_counter()
+    request_started = get_request_started_at(request)
     if not images:
         raise HTTPException(status_code=400, detail="At least one image is required")
 
     sources = []
-    for image in images:
-        sources.append(await read_upload_image(image))
+    try:
+        for image in images:
+            sources.append(await read_upload_image(image))
 
-    process_started = perf_counter()
-    result = process_batch_type(
-        service=SERVICE,
-        sources=sources,
-        options=build_options(
-            general_threshold,
-            character_threshold,
-            general_mcut,
-            character_mcut,
-            lang,
-            translation_mode,
-            model_dir,
-            repo_id,
-        ),
-        providers=PROVIDERS,
-        process_type="json",
-        export_format="inline",
-    )
-    process_ms = (perf_counter() - process_started) * 1000
-    backend_total_ms = (perf_counter() - request_started) * 1000
-    assert isinstance(result.body, dict)
-    return JSONResponse(result.body, headers=build_timing_headers(process_ms, backend_total_ms))
+        process_started = perf_counter()
+        result = process_batch_type(
+            service=SERVICE,
+            sources=sources,
+            options=build_options(
+                general_threshold,
+                character_threshold,
+                sensitive_threshold,
+                general_mcut,
+                character_mcut,
+                lang,
+                translation_mode,
+                model_dir,
+                repo_id,
+            ),
+            providers=PROVIDERS,
+            process_type="json",
+            export_format="inline",
+        )
+        process_ms = (perf_counter() - process_started) * 1000
+        backend_total_ms = (perf_counter() - request_started) * 1000
+        assert isinstance(result.body, dict)
+        return JSONResponse(result.body, headers=build_timing_headers(process_ms, backend_total_ms))
+    finally:
+        close_image_sources(sources)
 
 
 @app.post("/tag/batch/stream", summary="Tag Zip Image Batch From Raw Stream")
@@ -529,6 +623,7 @@ async def tag_images_batch_stream(
     filename: str | None = Query(None, description="Zip filename, optional"),
     general_threshold: float = Query(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Query(DEFAULT_CHARACTER_THRESHOLD),
+    sensitive_threshold: float = Query(DEFAULT_SENSITIVE_THRESHOLD),
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
@@ -538,30 +633,34 @@ async def tag_images_batch_stream(
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> JSONResponse:
-    request_started = perf_counter()
+    request_started = get_request_started_at(request)
     sources = await read_stream_zip_sources(request, filename=filename, content_type=content_type)
-    process_started = perf_counter()
-    result = process_batch_type(
-        service=SERVICE,
-        sources=sources,
-        options=build_options(
-            general_threshold,
-            character_threshold,
-            general_mcut,
-            character_mcut,
-            lang,
-            translation_mode,
-            model_dir,
-            repo_id,
-        ),
-        providers=PROVIDERS,
-        process_type="json",
-        export_format="inline",
-    )
-    process_ms = (perf_counter() - process_started) * 1000
-    backend_total_ms = (perf_counter() - request_started) * 1000
-    assert isinstance(result.body, dict)
-    return JSONResponse(result.body, headers=build_timing_headers(process_ms, backend_total_ms))
+    try:
+        process_started = perf_counter()
+        result = process_batch_type(
+            service=SERVICE,
+            sources=sources,
+            options=build_options(
+                general_threshold,
+                character_threshold,
+                sensitive_threshold,
+                general_mcut,
+                character_mcut,
+                lang,
+                translation_mode,
+                model_dir,
+                repo_id,
+            ),
+            providers=PROVIDERS,
+            process_type="json",
+            export_format="inline",
+        )
+        process_ms = (perf_counter() - process_started) * 1000
+        backend_total_ms = (perf_counter() - request_started) * 1000
+        assert isinstance(result.body, dict)
+        return JSONResponse(result.body, headers=build_timing_headers(process_ms, backend_total_ms))
+    finally:
+        close_image_sources(sources)
 
 
 @app.post("/process/stream", summary="Unified Process Endpoint From Raw Stream")
@@ -579,6 +678,7 @@ async def process_stream_endpoint(
     ),
     general_threshold: float = Query(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Query(DEFAULT_CHARACTER_THRESHOLD),
+    sensitive_threshold: float = Query(DEFAULT_SENSITIVE_THRESHOLD),
     general_mcut: bool = Query(False),
     character_mcut: bool = Query(False),
     lang: Literal["zh", "en"] | None = Query(None),
@@ -588,10 +688,11 @@ async def process_stream_endpoint(
     content_type: str | None = Header(None),
     _: str = Security(require_api_key),
 ) -> Response:
-    request_started = perf_counter()
+    request_started = get_request_started_at(request)
     options = build_options(
         general_threshold,
         character_threshold,
+        sensitive_threshold,
         general_mcut,
         character_mcut,
         lang,
@@ -602,40 +703,47 @@ async def process_stream_endpoint(
 
     if type in SINGLE_TYPES:
         source = await read_stream_image(request, filename=filename, content_type=content_type)
-        process_started = perf_counter()
-        result = process_single_type(
-            service=SERVICE,
-            source=source,
-            options=options,
-            providers=PROVIDERS,
-            process_type=type,
-            output_filename_template=output_filename_template,
-        )
-        process_ms = (perf_counter() - process_started) * 1000
-        backend_total_ms = (perf_counter() - request_started) * 1000
-        return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        try:
+            process_started = perf_counter()
+            result = process_single_type(
+                service=SERVICE,
+                source=source,
+                options=options,
+                providers=PROVIDERS,
+                process_type=type,
+                output_filename_template=output_filename_template,
+            )
+            process_ms = (perf_counter() - process_started) * 1000
+            backend_total_ms = (perf_counter() - request_started) * 1000
+            return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        finally:
+            close_image_source(source)
 
     if type in BATCH_TYPES:
         sources = await read_stream_zip_sources(request, filename=filename, content_type=content_type)
-        process_started = perf_counter()
-        result = process_batch_type(
-            service=SERVICE,
-            sources=sources,
-            options=options,
-            providers=PROVIDERS,
-            process_type=type,
-            export_format=export_format,
-            output_filename_template=output_filename_template,
-        )
-        process_ms = (perf_counter() - process_started) * 1000
-        backend_total_ms = (perf_counter() - request_started) * 1000
-        return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        try:
+            process_started = perf_counter()
+            result = process_batch_type(
+                service=SERVICE,
+                sources=sources,
+                options=options,
+                providers=PROVIDERS,
+                process_type=type,
+                export_format=export_format,
+                output_filename_template=output_filename_template,
+            )
+            process_ms = (perf_counter() - process_started) * 1000
+            backend_total_ms = (perf_counter() - request_started) * 1000
+            return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        finally:
+            close_image_sources(sources)
 
     raise HTTPException(status_code=400, detail="Unsupported type")
 
 
 @app.post("/process", summary="Unified Process Endpoint")
 async def process_endpoint(
+    request: Request,
     type: str = Form(..., description="tag | arrary | tagimg | json | mulitagimg"),
     image: UploadFile | None = File(None, description="Single image"),
     images: list[UploadFile] | None = File(None, description="Multiple images"),
@@ -652,6 +760,7 @@ async def process_endpoint(
     ),
     general_threshold: float = Form(DEFAULT_GENERAL_THRESHOLD),
     character_threshold: float = Form(DEFAULT_CHARACTER_THRESHOLD),
+    sensitive_threshold: float = Form(DEFAULT_SENSITIVE_THRESHOLD),
     general_mcut: bool = Form(False),
     character_mcut: bool = Form(False),
     lang: Literal["zh", "en"] | None = Form(None),
@@ -660,10 +769,11 @@ async def process_endpoint(
     repo_id: str | None = Form(None),
     _: str = Security(require_api_key),
 ) -> Response:
-    request_started = perf_counter()
+    request_started = get_request_started_at(request)
     options = build_options(
         general_threshold,
         character_threshold,
+        sensitive_threshold,
         general_mcut,
         character_mcut,
         lang,
@@ -682,50 +792,56 @@ async def process_endpoint(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         else:
             raise HTTPException(status_code=400, detail="single-image types require image or image_url")
-        process_started = perf_counter()
-        result = process_single_type(
-            service=SERVICE,
-            source=source,
-            options=options,
-            providers=PROVIDERS,
-            process_type=type,
-            output_filename_template=output_filename_template,
-        )
-        process_ms = (perf_counter() - process_started) * 1000
-        backend_total_ms = (perf_counter() - request_started) * 1000
-        return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        try:
+            process_started = perf_counter()
+            result = process_single_type(
+                service=SERVICE,
+                source=source,
+                options=options,
+                providers=PROVIDERS,
+                process_type=type,
+                output_filename_template=output_filename_template,
+            )
+            process_ms = (perf_counter() - process_started) * 1000
+            backend_total_ms = (perf_counter() - request_started) * 1000
+            return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        finally:
+            close_image_source(source)
 
     if type in BATCH_TYPES:
         sources = []
-        if images:
-            for upload in images:
-                sources.append(await read_upload_image(upload))
-        if input_dir and input_dir.strip():
-            try:
-                sources.extend(load_sources_from_dir(input_dir.strip()))
-            except FileNotFoundError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if image_urls and image_urls.strip():
-            try:
-                sources.extend(load_sources_from_urls(image_urls))
-            except Exception as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not sources:
-            raise HTTPException(status_code=400, detail="batch types require images, image_urls, or input_dir")
+        try:
+            if images:
+                for upload in images:
+                    sources.append(await read_upload_image(upload))
+            if input_dir and input_dir.strip():
+                try:
+                    sources.extend(load_sources_from_dir(input_dir.strip()))
+                except FileNotFoundError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if image_urls and image_urls.strip():
+                try:
+                    sources.extend(load_sources_from_urls(image_urls))
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if not sources:
+                raise HTTPException(status_code=400, detail="batch types require images, image_urls, or input_dir")
 
-        process_started = perf_counter()
-        result = process_batch_type(
-            service=SERVICE,
-            sources=sources,
-            options=options,
-            providers=PROVIDERS,
-            process_type=type,
-            export_format=export_format,
-            output_filename_template=output_filename_template,
-        )
-        process_ms = (perf_counter() - process_started) * 1000
-        backend_total_ms = (perf_counter() - request_started) * 1000
-        return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+            process_started = perf_counter()
+            result = process_batch_type(
+                service=SERVICE,
+                sources=sources,
+                options=options,
+                providers=PROVIDERS,
+                process_type=type,
+                export_format=export_format,
+                output_filename_template=output_filename_template,
+            )
+            process_ms = (perf_counter() - process_started) * 1000
+            backend_total_ms = (perf_counter() - request_started) * 1000
+            return build_response(result, process_ms=process_ms, backend_total_ms=backend_total_ms)
+        finally:
+            close_image_sources(sources)
 
     raise HTTPException(status_code=400, detail="Unsupported type")
 
